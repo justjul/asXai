@@ -174,8 +174,7 @@ def _extract_sections_pdfminer(
         "pdf_results": None,
         "pdf_discussion": None,
         "pdf_methods": None,
-        "pdf_text": None,
-        "author_list": authorlist}
+        "pdf_blocks": None}
 
     if valid_pages == 0:
         return sections
@@ -186,6 +185,7 @@ def _extract_sections_pdfminer(
     page_width, page_height = 595, 842
     nword_abstract_th, nword_sections_th = 30, 30
     text_blocks, tag_blocks, nwords_in_blocks = [], [], []
+    all_text_blocks = []
     section_to_find, section_heading, tag = "AUTHORS", "UNDEFINED", "UNDEFINED"
     reached_end = False
     if size_mode is not None:
@@ -212,6 +212,9 @@ def _extract_sections_pdfminer(
                        for end_section in last_section_names):
                     reached_end = True
                     continue
+
+                if not reached_end:
+                    all_text_blocks.append(filtered_text)
 
                 # removing everything before the author block as well as the correspondance fields
                 if p <= 1 and author_last_names:
@@ -315,12 +318,9 @@ def _extract_sections_pdfminer(
                 "materials and methods",
                 "experimental procedure"}))
 
-    sections["pdf_text"] = "\n".join(
+    sections["pdf_blocks"] = "\n**BLOCK**\n".join(
         text
-        for t, text in zip(tag_blocks, text_blocks)
-        if not any(s in t.lower() for s in {"undefined"}))
-
-    sections["author_list"] = authorlist
+        for text in all_text_blocks)
 
     return sections
 

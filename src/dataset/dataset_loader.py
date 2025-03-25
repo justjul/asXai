@@ -22,11 +22,9 @@ class paperData(TypedDict):
 class DataSetManager:
     def __init__(
             self,
-            dataset_source: str = "s2",
             data_types: Union[str, List[str]] = ["metadata", "text"],
             filters: Union[Tuple] | List[List[Tuple]] = None):
 
-        self.dataset_source = dataset_source
         self.data_types = data_types
         self.filters = filters
 
@@ -47,7 +45,7 @@ class DataSetManager:
             if not path:
                 continue
 
-            file_name = f"{self.dataset_source}_{dtype}_{subset}.parquet"
+            file_name = f"{dtype}_{subset}.parquet"
             file_path = path / subset / file_name
 
             if i == 0:
@@ -57,7 +55,7 @@ class DataSetManager:
 
             # fallback for missing pdf parquet
             if not file_path.exists():
-                file_name = f"{self.dataset_source}_{dtype}0_{subset}.parquet"
+                file_name = f"{dtype}0_{subset}.parquet"
                 file_path = path / subset / file_name
 
             if file_path.exists():
@@ -72,14 +70,10 @@ class DataSetManager:
 
 
 def load_worker_init(
-        dataset_source: str = "s2",
-        subsets: int = datetime.now().year,
         data_types: Union[str, List[str]] = ["metadata", "text"],
         filters: Union[Tuple] | List[List[Tuple]] = None):
     global datasetmanager
-    datasetmanager = DataSetManager(dataset_source,
-                                    subsets=subsets,
-                                    data_types=data_types,
+    datasetmanager = DataSetManager(data_types=data_types,
                                     filters=filters)
 
 
@@ -90,15 +84,11 @@ def load_subset(subset):
 
 
 def load_dataset(
-        dataset_source: str = "s2",
         subsets: Union[int, str, List[str], List[int]] = None,
         data_types: Union[str, List[str]] = ["metadata", "text"],
         filters: Union[List[Tuple], List[List[Tuple]]] = None,
         save_as: str = None, n_jobs=1) -> paperData:
     """Fetch dataset metadata and text data for given years and data types."""
-    if dataset_source not in config.DATA_SOURCES:
-        raise NameError(f"data_source should be one of {config.DATA_SOURCES}")
-
     # Normalize inputs
     if subsets is None:
         subsets = [year for year in os.listdir(
@@ -118,7 +108,6 @@ def load_dataset(
 
     load_pool = multiprocessing.Pool(processes=n_jobs,
                                      initializer=partial(load_worker_init,
-                                                         dataset_source=dataset_source,
                                                          data_types=data_types,
                                                          filters=filters))
     with load_pool:
@@ -150,7 +139,7 @@ def load_dataset(
                 dir_path = data_map[dtype][0] / save_as
                 dir_path.mkdir(parents=True, exist_ok=True)
 
-                file_name = f"{dataset_source}_{dtype}_{save_as}.parquet"
+                file_name = f"{dtype}_{save_as}.parquet"
                 file_path = dir_path / file_name
 
                 output[dtype].to_parquet(file_path, engine="pyarrow",

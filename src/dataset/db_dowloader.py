@@ -1,3 +1,6 @@
+import shutil
+import subprocess
+import json
 import config
 import os
 import time
@@ -194,8 +197,8 @@ def s2_db_download(
         os.makedirs(year_text_dir, exist_ok=True)
 
         metadata_fp = os.path.join(
-            year_metadata_dir, f's2_metadata_{year}.parquet')
-        text_fp = os.path.join(year_text_dir, f's2_text0_{year}.parquet')
+            year_metadata_dir, f'\metadata_{year}.parquet')
+        text_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
 
         metadata = articles.drop(columns=['title', 'abstract'])
         text = articles[['paperId', 'title', 'abstract',
@@ -232,9 +235,9 @@ def s2_db_update(
         year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
 
         metadata_fp = os.path.join(year_metadata_dir,
-                                   f's2_metadata_{year}.parquet')
-        text0_fp = os.path.join(year_text_dir, f's2_text0_{year}.parquet')
-        text_fp = os.path.join(year_text_dir, f's2_text_{year}.parquet')
+                                   f'metadata_{year}.parquet')
+        text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
+        text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
 
         old_metadata = pd.read_parquet(metadata_fp)
         old_text0 = pd.read_parquet(text0_fp)
@@ -267,3 +270,169 @@ def s2_db_update(
                 old_text.set_index("paperId")).reset_index()
             text.to_parquet(text_fp, engine="pyarrow",
                             compression="snappy", index=False)
+
+
+arxiv_category_map = {
+    'cs': 'Computer Science',
+    'q-bio': 'Biology',
+    'q-fin': 'Mathematics',
+    'stat': 'Mathematics',
+    'math': 'Mathematics',
+    'physics': 'Physics',
+    'astro-ph': 'Physics',
+    'cond-mat': 'Physics',
+    'gr-qc': 'Physics',
+    'hep-ex': 'Physics',
+    'hep-lat': 'Physics',
+    'hep-ph': 'Physics',
+    'hep-th': 'Physics',
+    'nlin': 'Physics',
+    'nucl-ex': 'Physics',
+    'nucl-th': 'Physics',
+    'quant-ph': 'Physics',
+    'eess': 'Physics',
+    'econ': 'Mathematics',
+    'physics.geo-ph': 'Geology',
+}
+
+
+def map_arxiv_category(categories):
+    mapped_fields = set()
+    for category in categories.split():
+        if category in arxiv_category_map:
+            mapped_fields.add(arxiv_category_map[category])
+        else:
+            # Attempt to map based on prefixes
+            prefix = category.split('.')[0]
+            if prefix in arxiv_category_map:
+                mapped_fields.add(arxiv_category_map[prefix])
+            else:
+                mapped_fields.add('Other')
+    return ','.join(mapped_fields)
+
+
+def arX_to_dataframe(arX_data: pd.DataFrame) -> pd.DataFrame:
+    arX_norm = arX_data.rename(columns={"id": "paperId", "authors": "authorName",
+                                        "categories": "fieldsOfStudy"})
+    arX_norm["openAccessPdf"] = arX_norm.apply(lambda x: "gs://arxiv-dataset/arxiv/arxiv/pdf/"
+                                               + x["paperId"].split('.')[0] + "/"
+                                               + x["paperId"] +
+                                               x['versions'][-1]['version']
+                                               + ".pdf", axis=1)
+    arX_norm["fieldsOfStudy"] = arX_norm["fieldsOfStudy"].apply(
+        map_arxiv_category)
+    arX_norm['authorName'] = arX_norm['authorName'].str.replace(
+        r'\s+and\s+', ', ', regex=True)
+    arX_norm["venue"] = 'arXiv.org'
+    arX_norm["authorId"] = None
+    arX_norm["citationCount"] = None
+    arX_norm["influentialCitationCount"] = None
+    arX_norm["publicationDate"] = arX_norm['versions'].apply(
+        lambda x: x[0]['created'])
+    arX_norm["publicationDate"] = pd.to_datetime(
+        arX_norm["publicationDate"], format=None)
+    arX_norm["publicationYear"] = arX_norm["publicationDate"].dt.year
+    arX_norm["publicationDate"] = arX_norm["publicationDate"].dt.strftime(
+        date_format="%Y-%m-%d")
+    arX_norm = arX_norm.drop(columns=["update_date"])
+
+    return arX_norm
+
+
+def load_arX_dataset(downloads_dir):
+    subprocess.run(["kaggle", "datasets", "download", "Cornell-University/arxiv", "--path",
+                    str(downloads_dir), "--unzip"], check=True)
+
+    data_path = os.path.join(downloads_dir, "arxiv-metadata-oai-snapshot.json")
+    arX_data = pd.read_json(data_path, lines=True)
+
+    arX_data = arX_to_dataframe(arX_data)
+
+    return arX_data
+
+
+def arX_db_update(
+        years: Union[int, List[int]] = datetime.now().year):
+
+    downloads_dir = config.DATA_PATH / "tmp"
+    if os.path.exists(downloads_dir):
+        shutil.rmtree(downloads_dir)
+    os.makedirs(downloads_dir, exist_ok=True)
+
+    years = [years] if isinstance(years, int) else years
+    arX_data = load_arX_dataset(downloads_dir)
+
+    for year in years:
+        year_metadata_dir = os.path.join(config.METADATA_PATH, str(year))
+        year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
+
+        metadata_fp = os.path.join(year_metadata_dir,
+                                   f'metadata_{year}.parquet')
+        text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
+        text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
+
+        old_metadata = pd.read_parquet(metadata_fp)
+        old_text0 = pd.read_parquet(text0_fp)
+        if os.path.isfile(text_fp):
+            old_text = pd.read_parquet(text_fp)
+        else:
+            old_text = None
+
+        mask = ((~old_metadata['fieldsOfStudy'].isna()) &
+                (old_metadata['publicationYear'].astype(int) == year))
+        old_text0 = old_text0[mask]
+        if old_text:
+            old_text = old_text[mask]
+        old_metadata = old_metadata.drop(columns=["update_date"])[mask]
+
+        # drop previous incorporation of arxiv papers that have now been
+        # incorporated into s2.
+        drop_idx = old_text0.duplicated(subset="title", keep=False)
+        drop_idx = drop_idx[old_metadata['authorId'].isna()]
+
+        old_metadata = old_metadata.drop(drop_idx)
+        old_text0 = old_text0.drop(drop_idx)
+        if old_text:
+            old_text = old_text.drop(drop_idx)
+
+        fields = old_metadata['fieldsOfStudy'].apply(
+            lambda x: x.split(',')[0]).unique()
+
+        arX_data_new = arX_data[arX_data['fieldsOfStudy'].isin(fields)]
+        arX_data_new = arX_data_new[~arX_data_new['title'].isin(
+            old_text0)]
+        arX_data_new = arX_data_new[arX_data_new['publicationYear'].astype(
+            int) == year]
+
+        arX_metadata = arX_data_new.drop(columns=['title', 'abstract', 'submitter',
+                                                  'comments', 'journal-ref', 'doi',
+                                                  'report-no', 'license', 'versions',
+                                                  'authors_parsed'])
+        arX_text = arX_data_new[['paperId',
+                                 'title', 'abstract', 'openAccessPdf']]
+
+        metadata = arX_metadata.set_index("paperId").combine_first(
+            old_metadata.set_index("paperId")).reset_index()
+
+        metadata.to_parquet(metadata_fp, engine="pyarrow",
+                            compression="snappy", index=False)
+
+        print(
+            f"added {len(arX_metadata)} , {len(metadata) - len(old_metadata)}")
+
+        text0 = arX_text.set_index("paperId").combine_first(
+            old_text0.set_index("paperId")).reset_index()
+
+        text0.to_parquet(text0_fp, engine="pyarrow",
+                         compression="snappy", index=False)
+
+        print(f"added {len(arX_text)} , {len(text0) - len(old_text0)}")
+
+        if old_text:
+            text = arX_text.set_index("paperId").combine_first(
+                old_text.set_index("paperId")).reset_index()
+            text.to_parquet(text_fp, engine="pyarrow",
+                            compression="snappy", index=False)
+
+    shutil.rmtree(downloads_dir)
+    os.makedirs(downloads_dir, exist_ok=True)

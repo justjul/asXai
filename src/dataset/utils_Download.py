@@ -8,6 +8,7 @@ from typing import Optional, TypedDict
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+import subprocess
 
 import logging
 from src.logger import get_logger
@@ -24,11 +25,13 @@ class PaperInfo(TypedDict):
 class PDFdownloader:
     def __init__(self,
                  downloads_dir: str,
+                 source: str = "s2",
                  headless: Optional[bool] = False,
                  worker_id: Optional[int] = 0,
                  timeout_loadpage: Optional[float] = 15,
                  timeout_startdw: Optional[float] = 5):
         self.downloads_dir = downloads_dir
+        self.source = source
         self.queue = []
         self.headless = headless
         self.worker_id = worker_id
@@ -41,7 +44,10 @@ class PDFdownloader:
         self.user_data_dir = tempfile.mkdtemp(
             prefix="chrome-profile-{self.worker_id}-", dir=temp_dir)
 
-        self.driver = self._init_driver(headless)
+        if self.source == "s2":
+            self.driver = self._s2_init_driver(headless)
+        else:
+            self.driver = None
 
         self.timeout_startdw = timeout_startdw
         self.timeout_loadpage = timeout_loadpage
@@ -59,7 +65,7 @@ class PDFdownloader:
             "validate user",
             "error 500"}
 
-    def _init_driver(self, headless: bool = False):
+    def _s2_init_driver(self, headless: bool = False):
         chromedriver_path = shutil.which("chromedriver")
         if not chromedriver_path:
             raise FileNotFoundError(
@@ -108,13 +114,22 @@ class PDFdownloader:
         return driver
 
     def close(self):
-        self.driver.quit()
-        shutil.rmtree(self.user_data_dir, ignore_errors=True)
+        if self.driver is not None:
+            self.driver.quit()
+            shutil.rmtree(self.user_data_dir, ignore_errors=True)
 
     def reset_queue(self):
         self.queue = []
 
     def download(self, paperInfo: PaperInfo):
+        if self.source == "s2":
+            paperInfo = self._s2_download(paperInfo)
+        elif self.source.lower() == "arxiv":
+            paperInfo = self._arX_download(paperInfo)
+
+        return paperInfo
+
+    def _s2_download(self, paperInfo: PaperInfo):
         try:
             extensions = ("*.pdf", "*.crdownload")
             paper_download_dir = os.path.join(
@@ -169,10 +184,42 @@ class PDFdownloader:
             for paperId in self.queue:
                 dir_path = os.path.join(self.downloads_dir, paperId)
                 if os.path.isdir(dir_path):
-                    if (glob.glob(os.path.join(dir_path, "*.crdownload"))
-                            or time.time() - os.path.getmtime(dir_path) < self.timeout_loadpage):
-                        return False
+                    try:
+                        if (glob.glob(os.path.join(dir_path, "*.crdownload"))
+                                or time.time() - os.path.getmtime(dir_path) < self.timeout_loadpage):
+                            return False
+                    except Exception:
+                        pass
         return True
+
+    def _arX_download(self, paperInfo: PaperInfo):
+        extensions = ("*.pdf")
+        paper_download_dir = os.path.join(
+            self.downloads_dir, paperInfo["paperId"])
+        os.makedirs(paper_download_dir, exist_ok=True)
+
+        self.queue.append(paperInfo["paperId"])
+        try:
+            subprocess.run(["gsutil", "cp", paperInfo["openAccessPdf"],
+                            str(paper_download_dir)], check=True)
+            endtime = time.time() + self.timeout_loadpage
+            download_status = "download too long"
+            while time.time() < endtime:
+                filename = [fname
+                            for ext in extensions
+                            for fname in glob.glob(os.path.join(paper_download_dir, ext))
+                            ]
+                if filename:
+                    download_status = "downloaded"
+                    break
+                else:
+                    time.sleep(0.2)
+        except Exception as e:
+            download_status = "broken link?"
+
+        paperInfo["pdf_status"] = download_status
+
+        return paperInfo
 
 
 def close_all_chrome_sessions(verbose: bool = True):

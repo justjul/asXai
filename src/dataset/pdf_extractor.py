@@ -164,10 +164,12 @@ def collect_extracted_PDFs(directory: str):
 
 def download_worker_init(
         downloads_dir: str,
+        source: str = "s2",
         timeout_loadpage: Optional[float] = 15,
         timeout_startdw: Optional[float] = 5):
     global downloader
     downloader = PDFdownloader(downloads_dir,
+                               source=source,
                                headless=False,
                                worker_id=os.getpid(),
                                timeout_loadpage=timeout_loadpage,
@@ -207,7 +209,6 @@ def extract_PDFs(papers):
 
 
 def download_and_extract_PDFs(
-        dataset_source: str = "s2",
         years: Optional[int] = datetime.now().year,
         n_jobs: Optional[int] = 2 *
         multiprocessing.cpu_count() // 3,
@@ -217,9 +218,6 @@ def download_and_extract_PDFs(
         timeout_loadpage: Optional[float] = 15,
         timeout_startdw: Optional[float] = 5,
         local_source: Optional[str] = None):
-
-    if dataset_source not in config.DATA_SOURCES:
-        raise NameError(f"data_source should be one of {config.DATA_SOURCES}")
 
     years = [datetime.now().year] if years is None else years
     years = [years] if not isinstance(years, list) else years
@@ -242,12 +240,10 @@ def download_and_extract_PDFs(
 
     for year in years:
         logger.info(f"Downloading pdfs for year {year}")
-        paperdata = load_dataset(dataset_source,
-                                 subsets=year,
+        paperdata = load_dataset(subsets=year,
                                  data_types=["metadata", "text"])
         if filters is not None:
-            paperdata_filt = load_dataset(dataset_source,
-                                          subsets=year,
+            paperdata_filt = load_dataset(subsets=year,
                                           data_types=[
                                               "text", "metadata"],
                                           filters=filters)
@@ -260,215 +256,230 @@ def download_and_extract_PDFs(
                              on="paperId",
                              how="inner")
 
-        minibatch_size = 20  # 100
-        batch_size = 3000  # len(data4pdf) // 10 #2 * n_jobs * minibatch_size
-        Npapers = 3000  # len(data4pdf)
-        with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
-                  desc=f"Year {year} / {len(years)} years ({Npapers} papers)",
-                  unit="batch") as pbar:
-            try:
-                for i in pbar:
-                    if not local_source:
-                        shutil.rmtree(downloads_dir)
-                        os.makedirs(downloads_dir, exist_ok=True)
-                    close_all_chrome_sessions()
+        paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
+                       "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
+        external_sources = {"http", "gs"} if not local_source else {None}
+        for source in external_sources:
+            if source is not None:
+                paperInfo_s = paperInfo[paperInfo["openAccessPdf"].str.startswith(
+                    source)]
+            else:
+                paperInfo_s = paperInfo
 
-                    TimoutRaised = False
-                    batch = paperInfo.iloc[i *
-                                           batch_size: min(Npapers, (i+1)*batch_size)].to_dict(orient="records")
+            if not paperInfo_s.empty:
+                minibatch_size = 20  # 100
+                # len(paperInfo_s) // 10 #2 * n_jobs * minibatch_size
+                batch_size = 3000
+                Npapers = 3000  # len(paperInfo_s)
+                with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
+                          desc=f"Year {year} / {len(years)} years ({Npapers} papers)",
+                          unit="batch") as pbar:
+                    try:
+                        for i in pbar:
+                            if not local_source:
+                                shutil.rmtree(downloads_dir)
+                                os.makedirs(downloads_dir, exist_ok=True)
+                            close_all_chrome_sessions()
 
-                    Nbatch = len(batch)
-                    minibatches = [batch[k * minibatch_size: min(Nbatch, (k + 1) * minibatch_size)]
-                                   for k in range(Nbatch // minibatch_size + 1)]
+                            TimoutRaised = False
+                            batch = paperInfo_s.iloc[i *
+                                                     batch_size: (i+1)*batch_size].to_dict(orient="records")
 
-                    minibatches = [b for b in minibatches
-                                   if len(b) > 0 and b[0] is not None]
+                            Nbatch = len(batch)
+                            minibatches = [batch[k * minibatch_size: min(Nbatch, (k + 1) * minibatch_size)]
+                                           for k in range(Nbatch // minibatch_size + 1)]
 
-                    final_results, dwload_results = [], []
-                    Nminibatches = len(minibatches)
-                    if minibatches:
-                        extract_pool = multiprocessing.Pool(
-                            processes=n_jobs_extract,
-                            initializer=partial(
-                                extract_worker_init,
-                                downloads_dir=downloads_dir,
-                                keepPDF=True if local_source else False,
-                                timeout=60))
+                            minibatches = [b for b in minibatches
+                                           if len(b) > 0 and b[0] is not None]
 
-                        if not local_source:
-                            download_pool = multiprocessing.Pool(
-                                processes=n_jobs_dwload,
-                                initializer=partial(
-                                    download_worker_init,
-                                    downloads_dir=downloads_dir,
-                                    timeout_loadpage=timeout_loadpage,
-                                    timeout_startdw=timeout_startdw))
+                            final_results, dwload_results = [], []
+                            Nminibatches = len(minibatches)
+                            if minibatches:
+                                extract_pool = multiprocessing.Pool(
+                                    processes=n_jobs_extract,
+                                    initializer=partial(
+                                        extract_worker_init,
+                                        downloads_dir=downloads_dir,
+                                        keepPDF=True if local_source else False,
+                                        timeout=60))
 
-                        else:
-                            download_pool = None
+                                if not local_source:
+                                    download_pool = multiprocessing.Pool(
+                                        processes=n_jobs_dwload,
+                                        initializer=partial(
+                                            download_worker_init,
+                                            downloads_dir=downloads_dir,
+                                            timeout_loadpage=timeout_loadpage,
+                                            timeout_startdw=timeout_startdw))
 
-                        with download_pool, extract_pool:
-                            if download_pool:
-                                async_dwload = [download_pool.apply_async(download_PDFs, (b,))
-                                                for b in minibatches]
-                                pending_dwload = set(async_dwload)
-                            else:
-                                pending_dwload = []
+                                else:
+                                    download_pool = None
 
-                            async_extract = [extract_pool.apply_async(extract_PDFs, (b,))
-                                             for b in minibatches]
-
-                            pending_extract = set(async_extract)
-
-                            end_time = time.time() + timeout_per_article * batch_size
-                            old_pending_articles = batch_size
-                            while pending_extract or pending_dwload:
-                                # Adjust timeout wall to one many tasks of extraction are still pending still download is done
-                                if time.time() > end_time:
-                                    logger.info(
-                                        f"{len(pending_extract)} extractions and {len(pending_dwload)} downloads out of {Nminibatches} timed out. Terminating the pool.")
-
-                                    TimoutRaised = True
-                                    extract_pool.terminate()
-                                    extract_pool.join()
+                                with download_pool, extract_pool:
                                     if download_pool:
-                                        download_pool.terminate()
-                                        download_pool.join()
-                                    break
-
-                                for task in list(pending_extract):
-                                    if task.ready():
-                                        pending_extract.remove(task)
-
-                                for task in list(pending_dwload):
-                                    if task.ready():
-                                        res_dw = task.get()
-                                        dwload_results.append(res_dw)
-                                        pending_dwload.remove(task)
-
-                                if pending_extract or pending_dwload:
-                                    if pending_dwload:
-                                        pbar.set_postfix({"download tasks": f"{len(pending_dwload)} left",
-                                                          "extraction tasks": f"{len(pending_extract)} left"})
-
-                                    time.sleep(1)
-
-                                if not pending_dwload:
-                                    time.sleep(timeout_per_worker /
-                                               len(pending_extract))
-
-                                    n_pending_articles = len(get_unprocessed_PDFs(papers=batch,
-                                                                                  directory=downloads_dir))
-
-                                    if n_pending_articles != old_pending_articles:
-                                        extratime = (
-                                            timeout_per_worker / 2 * n_pending_articles / len(pending_extract))
-
-                                        pbar.set_postfix({"extraction tasks": f"{len(pending_extract)} still running, \
-                                                        {extratime} seconds left"})
-
-                                        end_time = time.time() + extratime
-                                        old_pending_articles = n_pending_articles
+                                        async_dwload = [download_pool.apply_async(download_PDFs, (b,))
+                                                        for b in minibatches]
+                                        pending_dwload = set(async_dwload)
                                     else:
-                                        end_time = time.time()
+                                        pending_dwload = []
 
-                        if TimoutRaised:
-                            # Checking valid pages to avoid pdfminer getting stuck
-                            # This will change results in place
-                            pending_articles = get_unprocessed_PDFs(papers=batch,
-                                                                    directory=downloads_dir)
+                                    async_extract = [extract_pool.apply_async(extract_PDFs, (b,))
+                                                     for b in minibatches]
 
-                            pbar.set_postfix({"status": f"checking valid pages for {len(pending_articles)}" +
-                                              "articles that timed out..."})
+                                    pending_extract = set(async_extract)
 
-                            get_valid_pages_PDFs(papers=pending_articles,
-                                                 directory=downloads_dir,
-                                                 timeout=1)
+                                    end_time = time.time() + timeout_per_article * batch_size
+                                    old_pending_articles = batch_size
+                                    while pending_extract or pending_dwload:
+                                        # Adjust timeout wall to one many tasks of extraction are still pending still download is done
+                                        if time.time() > end_time:
+                                            logger.info(
+                                                f"{len(pending_extract)} extractions and {len(pending_dwload)} downloads out of {Nminibatches} timed out. Terminating the pool.")
 
-                            n_pending = len(pending_articles)
-                            minib_size = math.ceil(
-                                len(pending_articles) / (n_jobs_total + 1))
+                                            TimoutRaised = True
+                                            extract_pool.terminate()
+                                            extract_pool.join()
+                                            if download_pool:
+                                                download_pool.terminate()
+                                                download_pool.join()
+                                            break
 
-                            pending_minibatches = [pending_articles[k * minib_size: (k + 1) * minib_size]
-                                                   for k in range(n_jobs_total + 1)]
+                                        for task in list(pending_extract):
+                                            if task.ready():
+                                                pending_extract.remove(task)
 
-                            pending_minibatches = [b for b in pending_minibatches
-                                                   if len(b) > 0 and b[0] is not None]
+                                        for task in list(pending_dwload):
+                                            if task.ready():
+                                                res_dw = task.get()
+                                                dwload_results.append(res_dw)
+                                                pending_dwload.remove(task)
 
-                            n_pending = len(pending_minibatches)
-                            pbar.set_postfix(
-                                {"status": f"will process now {(n_pending)} articles..."})
+                                        if pending_extract or pending_dwload:
+                                            if pending_dwload:
+                                                pbar.set_postfix({"download tasks": f"{len(pending_dwload)} left",
+                                                                  "extraction tasks": f"{len(pending_extract)} left"})
 
-                            with multiprocessing.Pool(processes=n_jobs_total) as pool:
-                                async_extract = [pool.apply_async(extract_PDFs, (b,))
-                                                 for b in pending_minibatches]
+                                            time.sleep(1)
 
-                                pending = set(async_extract)
-                                end_time = time.time() + timeout_per_article * n_pending
-                                while pending:
-                                    if time.time() > end_time:
-                                        logger.info(f"{len(pending)} tasks out of {n_pending}" +
-                                                    "timed out after checking valid pdf pages.")
+                                        if not pending_dwload:
+                                            time.sleep(timeout_per_worker /
+                                                       len(pending_extract))
 
-                                        TimoutRaised = True
-                                        pool.terminate()
-                                        pool.join()
-                                        break
+                                            n_pending_articles = len(get_unprocessed_PDFs(papers=batch,
+                                                                                          directory=downloads_dir))
 
-                                    for task in list(pending):
-                                        if task.ready():
-                                            pending.remove(task)
-                                    if pending:
-                                        time.sleep(0.5)
+                                            if n_pending_articles != old_pending_articles:
+                                                extratime = (
+                                                    timeout_per_worker / 2 * n_pending_articles / len(pending_extract))
 
-                        pbar.set_postfix({"status": "gathering results..."})
-                        final_results = collect_extracted_PDFs(downloads_dir)
-                        print(len(final_results))
+                                                pbar.set_postfix({"extraction tasks": f"{len(pending_extract)} still running, \
+                                                                {extratime} seconds left"})
 
-                        if final_results:
-                            print("final_results collected")
-                            pdfdata = pd.DataFrame(
-                                [pdf for pdf in final_results])
+                                                end_time = time.time() + extratime
+                                                old_pending_articles = n_pending_articles
+                                            else:
+                                                end_time = time.time()
 
-                            pbar.set_postfix({"status": f"{len(pdfdata)} " +
-                                              f"articles extracted out of {batch_size}"})
+                                if TimoutRaised:
+                                    # Checking valid pages to avoid pdfminer getting stuck
+                                    # This will change results in place
+                                    pending_articles = get_unprocessed_PDFs(papers=batch,
+                                                                            directory=downloads_dir)
 
-                            if dwload_results:
-                                print("collecting download results")
-                                dwdata = pd.DataFrame([{k: d.get(k, None)
-                                                        for k in ["paperId", "pdf_status"]}
-                                                       for r in dwload_results
-                                                       if r is not None
-                                                       for d in r
-                                                       if d is not None])
+                                    pbar.set_postfix({"status": f"checking valid pages for {len(pending_articles)}" +
+                                                      "articles that timed out..."})
 
-                                pdfdata = (dwdata.set_index("paperId").combine_first(
-                                    pdfdata.set_index("paperId")).reset_index(drop=False))
+                                    get_valid_pages_PDFs(papers=pending_articles,
+                                                         directory=downloads_dir,
+                                                         timeout=1)
 
-                            paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
-                                paperdata["text"].set_index("paperId")).reset_index(drop=False))
+                                    n_pending = len(pending_articles)
+                                    minib_size = math.ceil(
+                                        len(pending_articles) / (n_jobs_total + 1))
 
-                            mask = paperdata["text"]["abstract"] == "None"
-                            paperdata["text"].loc[mask,
-                                                  "abstract"] = paperdata["text"].loc[mask, "pdf_abstract"]
-                            paperdata["text"] = paperdata["text"].fillna(
-                                'None')
-                            paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
+                                    pending_minibatches = [pending_articles[k * minib_size: (k + 1) * minib_size]
+                                                           for k in range(n_jobs_total + 1)]
 
-                # Cleaning up download directory
-                if not local_source:
-                    shutil.rmtree(downloads_dir)
-                    os.makedirs(downloads_dir, exist_ok=True)
-                close_all_chrome_sessions()
+                                    pending_minibatches = [b for b in pending_minibatches
+                                                           if len(b) > 0 and b[0] is not None]
 
-            except Exception as e:
-                pbar.close()
-                raise e
+                                    n_pending = len(pending_minibatches)
+                                    pbar.set_postfix(
+                                        {"status": f"will process now {(n_pending)} articles..."})
+
+                                    with multiprocessing.Pool(processes=n_jobs_total) as pool:
+                                        async_extract = [pool.apply_async(extract_PDFs, (b,))
+                                                         for b in pending_minibatches]
+
+                                        pending = set(async_extract)
+                                        end_time = time.time() + timeout_per_article * n_pending
+                                        while pending:
+                                            if time.time() > end_time:
+                                                logger.info(f"{len(pending)} tasks out of {n_pending}" +
+                                                            "timed out after checking valid pdf pages.")
+
+                                                TimoutRaised = True
+                                                pool.terminate()
+                                                pool.join()
+                                                break
+
+                                            for task in list(pending):
+                                                if task.ready():
+                                                    pending.remove(task)
+                                            if pending:
+                                                time.sleep(0.5)
+
+                                pbar.set_postfix(
+                                    {"status": "gathering results..."})
+                                final_results = collect_extracted_PDFs(
+                                    downloads_dir)
+                                print(len(final_results))
+
+                                if final_results:
+                                    print("final_results collected")
+                                    pdfdata = pd.DataFrame(
+                                        [pdf for pdf in final_results])
+
+                                    pbar.set_postfix({"status": f"{len(pdfdata)} " +
+                                                      f"articles extracted out of {batch_size}"})
+
+                                    if dwload_results:
+                                        print("collecting download results")
+                                        dwdata = pd.DataFrame([{k: d.get(k, None)
+                                                                for k in ["paperId", "pdf_status"]}
+                                                               for r in dwload_results
+                                                               if r is not None
+                                                               for d in r
+                                                               if d is not None])
+                                        pdfdata = (pdfdata.set_index("paperId").combine_first(
+                                            dwdata.set_index("paperId")).reset_index(drop=False))
+                                        # pdfdata = (dwdata.set_index("paperId").combine_first(
+                                        #     pdfdata.set_index("paperId")).reset_index(drop=False))
+
+                                    paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
+                                        paperdata["text"].set_index("paperId")).reset_index(drop=False))
+
+                                    mask = paperdata["text"]["abstract"] == "None"
+                                    paperdata["text"].loc[mask,
+                                                          "abstract"] = paperdata["text"].loc[mask, "pdf_abstract"]
+                                    paperdata["text"] = paperdata["text"].fillna(
+                                        'None')
+                                    paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
+
+                        # Cleaning up download directory
+                        if not local_source:
+                            shutil.rmtree(downloads_dir)
+                            os.makedirs(downloads_dir, exist_ok=True)
+                        close_all_chrome_sessions()
+
+                    except Exception as e:
+                        pbar.close()
+                        raise e
 
         output_dir_year = os.path.join(config.TEXTDATA_PATH, str(year))
         os.makedirs(output_dir_year, exist_ok=True)
         filepath = os.path.join(output_dir_year,
-                                f"{dataset_source}_text_{year}.parquet")
+                                f"text_{year}.parquet")
 
         paperdata["text"].to_parquet(filepath, engine="pyarrow",
                                      compression="snappy", index=True)
