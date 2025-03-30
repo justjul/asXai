@@ -7,11 +7,15 @@ import pandas as pd
 
 import logging
 from src.logger import get_logger
+from src.utils import load_params
 
 import multiprocessing
 from functools import partial
 
 logger = get_logger(__name__, level=logging.INFO)
+
+params = load_params()
+load_config = params["load"]
 
 
 class paperData(TypedDict):
@@ -36,8 +40,8 @@ class DataSetManager:
             "metadata": config.METADATA_PATH,
             "text": config.TEXTDATA_PATH}
         paperdata = {
-            "metadata": [],
-            "text": []}
+            "metadata": pd.DataFrame(),
+            "text": pd.DataFrame()}
 
         paperIds = None
         for i, dtype in enumerate(self.data_types):
@@ -87,7 +91,8 @@ def load_dataset(
         subsets: Union[int, str, List[str], List[int]] = None,
         data_types: Union[str, List[str]] = ["metadata", "text"],
         filters: Union[List[Tuple], List[List[Tuple]]] = None,
-        save_as: str = None, n_jobs=1) -> paperData:
+        save_as: str = None,
+        n_jobs: int = load_config['n_jobs']) -> paperData:
     """Fetch dataset metadata and text data for given years and data types."""
     # Normalize inputs
     if subsets is None:
@@ -96,7 +101,10 @@ def load_dataset(
     elif isinstance(subsets, int) or isinstance(subsets, str):
         subsets = [str(subsets)]
     else:
-        subsets = [str(subsets) for subsets in subsets]
+        subsets = [str(subset) for subset in subsets]
+
+    n_jobs = min(n_jobs, len(subsets))
+    n_jobs = min(n_jobs, 2 * multiprocessing.cpu_count() // 3)
 
     data_types = data_types or ["metadata", "text"]
     data_types = [data_types] if isinstance(data_types, str) else data_types

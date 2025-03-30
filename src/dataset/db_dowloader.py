@@ -10,13 +10,17 @@ from tqdm import tqdm
 from typing import List, Optional, Union
 import numpy as np
 import pandas as pd
-from .utils import merge_dicts
+from src.utils import merge_dicts
+from src.utils import load_params
 
 import requests
 import logging
 from src.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
+
+params = load_params()
+s2_config = params["download"]
 
 
 def s2_validate_fields(
@@ -161,13 +165,11 @@ def get_s2_articles_year(
 
 def s2_db_download(
         years: Union[int, List[int]] = datetime.now().year,
-        min_citations_per_year: float = 1,
-        fields_of_study: Optional[List[str]] = ['Computer Science', 'Biology'],
-        fields_to_return: Optional[List[str]] = [
-            'title', 'citationCount', 'abstract', 'venue', 'authors', 'publicationDate', 'fieldsOfStudy'],
-        additional_specs: Optional[List[str]] = [
-            'influentialCitationCount', 'openAccessPdf', 'references'],
-        overwrite: bool = False):
+        min_citations_per_year: float = s2_config['min_citations_per_year'],
+        fields_of_study: Optional[List[str]] = s2_config['fields_of_study'],
+        fields_to_return: Optional[List[str]] = s2_config['fields_to_return'],
+        overwrite: bool = False,
+        confirm: bool = True):
 
     years = [years] if isinstance(years, int) else years
     citation_thresholds = np.maximum(
@@ -180,8 +182,21 @@ def s2_db_download(
     fields_to_return_str = ','.join(s2_validate_fields(fields_to_return, {
         'title', 'citationCount', 'abstract', 'venue', 'authors', 'publicationDate', 'fieldsOfStudy'}))
 
-    specs_str = ','.join(s2_validate_fields(additional_specs, {
+    specs_str = ','.join(s2_validate_fields(fields_to_return, {
         "influentialCitationCount", "openAccessPdf", "references", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
+
+    logger.info(f"will now load papers for {years} \n"
+                f"fields of study: {fields_to_return_str}\n"
+                f"returning fields: {fields_to_return_str}")
+
+    if overwrite:
+        if confirm:
+            msg = f"Replace existing database for years {years}?"
+            proceed = input(f"{msg}\nProceed? (Y/n): ").strip().lower()
+            if proceed not in ["y", "yes", ""]:
+                print("Download aborted.")
+                return
+        logger.warning("EXISTING DATA WILL BE REPLACED WITH NEW DOWNLOAD")
 
     for year, min_citation in zip(years, citation_thresholds):
         endpoint = (

@@ -1,40 +1,56 @@
 import os
-import glob
 import config
 import docker
 import docker.errors
 import asyncio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from qdrant_client.models import Filter, FieldCondition, Match
+from qdrant_client.models import HnswConfigDiff, OptimizersConfigDiff
+from qdrant_client.models import TokenizerType, TextIndexParams
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
-from typing import List, Tuple, Union, TypedDict
-from datetime import datetime
+from typing import List, Tuple, Union, TypedDict, AsyncGenerator
 from pathlib import Path
 import json
+import uuid
 import time
 from tqdm import tqdm
+from transformers import AutoConfig
+from src.utils import load_params
 
 import logging
 from src.logger import get_logger
 
 logger = get_logger(__name__, level=logging.INFO)
 
+params = load_params()
+embedding_config = params["embedding"]
+qdrant_config = params["qdrant"]
+qdrant_config["collection_name"] = embedding_config["model_name"]
+
 
 class QdrantManager:
     def __init__(self,
-                 collection_name: str = config.VECTOR_SIZE.keys()[0],
-                 docker_timeout: float = 5.0,
-                 watch_tmp_timeout: float = 60.0):
+                 model_name: str = qdrant_config["model_name"],
+                 docker_timeout: float = qdrant_config["docker_timeout"],
+                 watch_tmp_timeout: float = qdrant_config["watch_tmp_timeout"],
+                 max_threads: int = qdrant_config["max_threads"],):
+
         self.volume_path = config.VECTORDB_PATH
         self.tmp_path = config.VECTORDB_PATH / "tmp"
         self.container_name = config.PROJECT_NAME + "-Qdrant"
-        self.collection_name = collection_name
-        self.vector_size = config.VECTOR_SIZE[collection_name]
-        self.port = config.QDRANT_PORT
-        self.host = config.QDRANT_HOST
+        self.collection_name = model_name.split('/')[-1]
+        self.model_name = model_name
+
+        hidden_size = AutoConfig.from_pretrained(self.model_name).hidden_size
+        self.vector_size = hidden_size
+
+        self.port = qdrant_config["port"]
+        self.host = qdrant_config["host"]
+
         self.docker_timeout = docker_timeout
         self.watch_tmp_timeout = watch_tmp_timeout
+        self.max_threads = max_threads
 
         self.start_qdrant_container()
 
@@ -55,8 +71,8 @@ class QdrantManager:
                                               ports={
                                                   f"{self.port}/tcp": self.port},
                                               volumes={
-                                                  self.volume_path: {
-                                                      'bind': 'qdrant/storage',
+                                                  str(self.volume_path): {
+                                                      'bind': '/qdrant/storage',
                                                       'mode': 'rw'
                                                   }
                                               },
@@ -86,12 +102,12 @@ class QdrantManager:
         except docker.errors.NotFound:
             logger.info("Qdrant container not found...")
 
-    def get_existing_paperIds(self):
+    async def get_existing_paperIds(self):
         paperIds = set()
         scroll_cursor = None
 
         while True:
-            scroll_result, scroll_cursor = self.client.scroll(
+            scroll_result, scroll_cursor = await self.client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=None,
                 with_payload=False,
@@ -115,7 +131,7 @@ class QdrantManager:
             self.client.delete(
                 collection_name=self.collection_name,
                 points_selector=Filter(must=[FieldCondition(key="paperId",
-                                                            match=Match(value=id))])
+                                                                match=MatchValue(value=id))])
             )
             for id in paperIds
         ]
@@ -127,29 +143,65 @@ class QdrantManager:
             data = json.load(f)
         embeddings = data['embeddings']
         payloads = data['payloads']
-        points = [PointStruct(id=f"{paperId}_{k}", vector=emb, payload=payloads[k])
+        # Should try herebelow to upsert chunks as groups instead of isolated points
+        points = [PointStruct(id=str(uuid.uuid5(namespace=uuid.NAMESPACE_DNS, name=f"{paperId}_{k}")),
+                              vector=emb, payload=payloads[k])
                   for k, emb in enumerate(embeddings)]
+
         await self.client.upsert(collection_name=self.collection_name, points=points)
+
         os.remove(file_path)
 
-    async def sync_qdrant(self):
+    async def sync_qdrant(self, done_event=None):
+        if done_event is None:
+            class DummyEvent:
+                def is_set(self): return False
+            done_event = DummyEvent()
+
+        self.semaphore = asyncio.Semaphore(self.max_threads)
+
         self.client = AsyncQdrantClient(host=self.host, port=self.port)
 
         if not await self.client.collection_exists(self.collection_name):
-            await self.client.recreate_collection(
+            await self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(size=self.vector_size,
-                                            distance=Distance.COSINE))
+                                            distance=Distance.COSINE),
+                optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
+                hnsw_config=HnswConfigDiff(on_disk=True,
+                                           m=16,
+                                           ef_construct=100))
+            # #Check and fix the following to create
+            # await self.client.create_payload_index(
+            #     collection_name="{collection_name}",
+            #     field_name="name_of_the_field_to_index",
+            #     field_schema=TextIndexParams(type="text",
+            #                                  tokenizer=TokenizerType.WORD,
+            #                                  min_token_len=2,
+            #                                  max_token_len=15,
+            #                                  lowercase=True,
+            #                                  ),
+            # )
 
-        qdrant_paperIds = self.get_existing_paperIds(self)
+            # await self.client.create_payload_index(
+            #     collection_name="{collection_name}",
+            #     field_name="name_of_the_field_to_index", #
+            #     field_schema=TextIndexParams(type="text",
+            #                                  tokenizer=TokenizerType.WORD,
+            #                                  min_token_len=2,
+            #                                  max_token_len=15,
+            #                                  lowercase=True,
+            #                                  ),
+            # )
+
+        # qdrant_paperIds = self.get_existing_paperIds()
 
         endtime = time.time() + self.watch_tmp_timeout
         paper_ids = []
-        while paper_ids or time.time() < endtime:
+        while paper_ids or not done_event.is_set() or time.time() < endtime:
             paper_ids = self.get_embedding_ids()
-
             if paper_ids:
-                await self.delete_papers(paper_ids)
+                # await self.delete_papers(paper_ids)
 
                 upload_tasks = [self.upload_paper(id) for id in paper_ids]
                 with tqdm(asyncio.as_completed(upload_tasks),
@@ -158,3 +210,60 @@ class QdrantManager:
                     for f in pbar:
                         await f
                 endtime = time.time() + self.watch_tmp_timeout
+
+    async def query(self,
+                    query_vector: List[float],
+                    top_k: int = 5,
+                    filter_by_paper_id: Union[str, None] = None,
+                    filter_payloads: Union[dict, None] = None):
+
+        if not hasattr(self, 'client'):
+            self.client = AsyncQdrantClient(host=self.host, port=self.port)
+
+        must_conditions = []
+
+        if filter_by_paper_id:
+            must_conditions.append(FieldCondition(
+                key="paperId", match=MatchValue(value=filter_by_paper_id)))
+
+        if filter_payloads:
+            for key, values in filter_payloads.items():
+                must_conditions.append(FieldCondition(
+                    key=key, match=MatchValue(value=values)))
+
+        query_filter = Filter(
+            must=must_conditions) if must_conditions else None
+
+        results = await self.client.search(
+            collection_name=self.collection_name,
+            query_vector=query_vector,
+            query_filter=query_filter,
+            limit=top_k,
+            with_payload=True
+        )
+
+        return results
+
+    async def query_batch_streamed(self,
+                                   query_vectors: List[List[float]],
+                                   top_k: int = 5, **kwargs):
+        tasks = [
+            self.query(query_vector=vec, top_k=top_k, **kwargs)
+            for vec in query_vectors
+        ]
+        results = []
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            results.append(result)
+        return results
+
+    async def query_stream_generator(self,
+                                     query_vectors: List[List[float]],
+                                     top_k: int = 5, **kwargs) -> AsyncGenerator:
+        tasks = [
+            self.query(query_vector=vec, top_k=top_k, **kwargs)
+            for vec in query_vectors
+        ]
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            yield result

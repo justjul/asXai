@@ -1,0 +1,43 @@
+embedding:
+  model_name: intfloat/multilingual-e5-large-instruct
+  chunk_size: null
+  max_chunks: 10
+  chunk_batch_size: 32
+  paper_batch_size: 1000
+  n_jobs: 20
+
+qdrant:
+  docker_timeout: 30.0
+  watch_tmp_timeout: 60.0
+  max_threads: 20
+  port: 6333
+  host: localhost
+
+download:
+  min_citations_per_year: 1
+  fields_of_study:
+    - Computer Science
+    - Biology
+  fields_to_return:
+    - title
+    - citationCount
+    - abstract
+    - venue
+    - authors
+    - publicationDate
+    - fieldsOfStudy
+    - influentialCitationCount
+    - openAccessPdf
+    - references
+
+pdf:
+  n_jobs_download: 20
+  n_jobs_extract: 40
+  timeout_per_article: 0.4
+  timeout_loadpage: 15
+  timeout_startdw: 5
+  save_pdfs_to: null
+  keep_pdfs: false
+
+load:
+  n_jobs: 20
