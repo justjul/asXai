@@ -1,9 +1,7 @@
-from .utils_qdrant import QdrantManager
-from .utils_embeddings import PaperEmbed
-from .embed_and_push import embed_and_push
+from .push_qdrant import QdrantManager
+from .embed import PaperEmbed
 
 __all__ = [
     "QdrantManager",
     "PaperEmbed",
-    "embed_and_push"
 ]
