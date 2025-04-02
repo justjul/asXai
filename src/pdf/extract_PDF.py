@@ -394,6 +394,8 @@ def get_clean_block_text(text):
                 ref_text = ' '.join(ref_text.splitlines())
                 for mark in ref_markers:
                     ref_text = ref_text.replace(mark, '')
+                    ref_text = re.sub(
+                        r'\b([A-Z][a-z]*|[A-Z])\.', r'\1', ref_text)
 
         except Exception as e:
             print(main_text)
@@ -680,7 +682,8 @@ def extract_PDFs(
                              on="paperId",
                              how="inner")
 
-        processed_ids, new_ids = [], []
+        new_ids = collect_downloaded_ids(downloads_dir)
+        processed_ids = []
         ids_to_save = []
         year_ids = set(paperInfo["paperId"])
         endtime = time.time() + timeout_per_article * len(paperInfo)

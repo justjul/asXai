@@ -73,8 +73,10 @@ def chunk_text(
                     chunks_len.append(current_len)
                 current_chunk = [sent_clean]
                 current_len = len(tokenized)
+        if len(chunks) > max_chunks + 2:
+            break
 
-    if (current_chunk and current_len > chunk_size // 3
+    if (len(chunks) < max_chunks+2 and current_chunk and current_len > 0
             and current_len < chunk_size - prefix_len):
         chunks.append(' '.join(current_chunk))
         chunks_len.append(current_len)
@@ -126,10 +128,55 @@ def load_and_chunk(paperData: dict,
     masks = masked_chunks["masks"]
     paper_id = paperData["paperId"]
     paperInfo = paperData.copy()
-    payloads = [{**paperInfo, "text": chunk}
+    payloads = [{**paperInfo, "text": chunk, "is_ref": False}
                 for chunk in masked_chunks["chunks"]]
 
+    ref_chunks = chunk_text(paperData["ref_text"], tokenizer,
+                            chunk_size=chunk_size,
+                            max_chunks=max_chunks,
+                            prefix_len=prefix_len)
+    texts.extend(ref_chunks["chunks"])
+    masks.extend(ref_chunks["masks"])
+    paperInfo = paperData.copy()
+    payloads.extend([{**paperInfo, "text": chunk, "is_ref": True}
+                     for chunk in ref_chunks["chunks"]])
+
     return paper_id, texts, masks, payloads
+
+
+def get_normalized_textdata(textdata):
+    papertext = textdata.copy()
+    papertext['main_text'] = papertext['main_text'].fillna('')
+    papertext['main_text'] = papertext['main_text'].replace(to_replace='None',
+                                                            value='')
+    papertext['pdf_extracted'] = papertext['main_text'].str.strip().str.len() > 500
+
+    papertext['ref_text'] = papertext['ref_text'].fillna('')
+    papertext['ref_text'] = papertext['ref_text'].replace(to_replace='None',
+                                                          value='')
+
+    mask = papertext["main_text"].str.len() < 500
+    papertext.loc[mask, "main_text"] = papertext.loc[mask].apply(
+        lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
+
+    mask = papertext["ref_text"].str.len() < 500
+    papertext.loc[mask, "ref_text"] = papertext.loc[mask, "main_text"]
+
+    papertext = papertext[['paperId', 'main_text', 'ref_text', 'pdf_extracted', 'title',
+                           'abstract',]]
+    return papertext
+
+
+def get_normalized_metadata(metadata):
+    return metadata
+
+
+def get_payload_and_text(paperdata):
+    textdata = get_normalized_textdata(paperdata["text"])
+    metadata = get_normalized_metadata(paperdata["metadata"])
+    data = pd.merge(metadata, textdata, how='left', on='paperId')
+
+    return data
 
 
 def save_embeddings(paper_id: str,
@@ -227,12 +274,12 @@ class PaperEmbed:
 
         return embeddings
 
-    def batch_embeddings(self, papers):
+    def batch_embeddings(self, paperData):
+        papers = get_payload_and_text(paperData)
+        papers = papers.to_dict(orient='records')
+
         save_executor = ThreadPoolExecutor(max_workers=self.n_jobs)
         chunk_executor = ThreadPoolExecutor(max_workers=self.n_jobs)
-
-        if isinstance(papers, pd.DataFrame):
-            papers = papers.to_dict(orient='records')
 
         tqdm = get_tqdm()
         with tqdm(range(0, len(papers), self.paper_batch_size),
@@ -276,13 +323,17 @@ class PaperEmbed:
                                                          prefix=doc_prefix)
 
                 for paper_id in all_paper_ids:
+                    ref_embedding = torch.stack([emb for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
+                                                 if id == paper_id and payload['is_ref']])
+                    ref_embedding = ref_embedding.mean(dim=0).tolist()
                     embeded_data = {
                         "embeddings": [
-                            emb.tolist() for id, emb in zip(batched_ids, embeddings)
-                            if id == paper_id],
+                            emb.tolist() for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
+                            if id == paper_id and not payload['is_ref']],
                         "payloads": [
                             payload for id, payload in zip(batched_ids, batched_payloads)
-                            if id == paper_id]}
+                            if id == paper_id and not payload['is_ref']],
+                        "ref_embedding": ref_embedding}
                     if embeded_data["embeddings"]:
                         save_executor.submit(
                             save_embeddings, paper_id, embeded_data, self.cache_dir)

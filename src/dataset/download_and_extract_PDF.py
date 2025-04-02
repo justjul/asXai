@@ -1,12 +1,8 @@
-import re
 from pathlib import Path
 from multiprocessing import Process, Event
-import asyncio
-import pandas as pd
 from datetime import datetime
 from typing import Optional, List, Any
 
-from dataIO.load import load_data
 from pdf.extract_PDF import extract_PDFs
 from pdf.download_PDF import download_PDFs
 
