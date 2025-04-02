@@ -249,6 +249,9 @@ def _get_markers():
 BLOCK_pattern = re.compile(
     r'(?s)\*\*BLOCK\*\*fs==\s*([\d.]+)\*\*b==\s*([\d.]+)\*\*t==\s*([\d.]+)\*\*l==\s*([\d.]+)\*\*r==\s*([\d.]+)\*\*(.*?)(?=\*\*BLOCK\*\*fs==|$)')
 
+ref_markers = {"references", "References",
+               "REFERENCES", "Literature Cited"}
+
 
 def _is_normal_text(word):
     if any(ch.isdigit() for ch in word):
@@ -259,8 +262,6 @@ def _is_normal_text(word):
 
 
 def _get_ref_index(blocks, fs_normal_text):
-    ref_markers = {"references", "References",
-                   "REFERENCES", "Literature Cited"}
     year_markers = {str(y) for y in range(1950, datetime.now().year)}
     ref_idx_start, ref_idx_end = None, None
     Nbnext = 20
@@ -391,6 +392,9 @@ def get_clean_block_text(text):
                              if (blk['fontsize'] == fs_ref_text and blk['possible_ref'])]
                 ref_text = ' '.join(refblocks)
                 ref_text = ' '.join(ref_text.splitlines())
+                for mark in ref_markers:
+                    ref_text = ref_text.replace(mark, '')
+
         except Exception as e:
             print(main_text)
             raise e

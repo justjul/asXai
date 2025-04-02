@@ -88,16 +88,16 @@ def run_embedding(
 
 def get_normalized_textdata(textdata):
     papertext = textdata.copy()
-    papertext['full_text'] = papertext['full_text'].fillna('')
-    papertext['full_text'] = papertext['full_text'].replace(to_replace='None',
+    papertext['main_text'] = papertext['main_text'].fillna('')
+    papertext['main_text'] = papertext['main_text'].replace(to_replace='None',
                                                             value='')
-    papertext['full_text'] = papertext['full_text'].str.strip().str.len() > 5
+    papertext['main_text'] = papertext['main_text'].str.strip().str.len() > 5
 
-    mask = papertext["full_text"].str.len() < 5
-    papertext.loc[mask, "full_text"] = papertext.loc[mask].apply(
+    mask = papertext["main_text"].str.len() < 5
+    papertext.loc[mask, "main_text"] = papertext.loc[mask].apply(
         lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
 
-    papertext = papertext[['paperId', 'full_text', 'pdf_extracted', 'title',
+    papertext = papertext[['paperId', 'main_text', 'ref_text', 'pdf_extracted', 'title',
                            'abstract',]]
     return papertext
 

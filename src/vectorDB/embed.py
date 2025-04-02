@@ -118,7 +118,7 @@ def load_and_chunk(paperData: dict,
                    chunk_size: int,
                    max_chunks: int,
                    prefix_len: int = 0):
-    masked_chunks = chunk_text(paperData["full_text"], tokenizer,
+    masked_chunks = chunk_text(paperData["main_text"], tokenizer,
                                chunk_size=chunk_size,
                                max_chunks=max_chunks,
                                prefix_len=prefix_len)
@@ -221,7 +221,7 @@ class PaperEmbed:
                 torch.cuda.empty_cache()
 
             if embeddings:
-                embeddings = torch.cat(embeddings, dim=0).tolist()
+                embeddings = torch.cat(embeddings, dim=0)
             else:
                 embeddings = None
 
@@ -278,10 +278,10 @@ class PaperEmbed:
                 for paper_id in all_paper_ids:
                     embeded_data = {
                         "embeddings": [
-                            emb for id, emb in zip(batched_ids, embeddings)
+                            emb.tolist() for id, emb in zip(batched_ids, embeddings)
                             if id == paper_id],
                         "payloads": [
-                            p_l for id, p_l in zip(batched_ids, batched_payloads)
+                            payload for id, payload in zip(batched_ids, batched_payloads)
                             if id == paper_id]}
                     if embeded_data["embeddings"]:
                         save_executor.submit(
