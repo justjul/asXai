@@ -45,7 +45,6 @@ def get_s2_dataset_batch(
         dataset_list = requests.get(endpoint + token_str).json()
         if 'total' not in dataset_list or (dataset_list.get('token') is None and check_token):
             logger.info("Failed to download batch. Will try again...")
-            print(dataset_list)
         time.sleep(waitsec)
         waitsec += 1
     return dataset_list
@@ -67,9 +66,9 @@ def get_s2_articles_batch(
                 r = requests.post(endpoint, params={'fields': specs},
                                   json={"ids": batch_ids}).json()
             except requests.exceptions.JSONDecodeError:
-                logger.error("Invalid JSON response received. Trying again")
+                logger.error(
+                    f"Invalid JSON response received. Will try again in {waitsec}")
             time.sleep(waitsec)
-            print(waitsec, '\n', r)
             waitsec += 1
         if r:
             df_temp = pd.DataFrame([doc for doc in r if doc is not None])
@@ -109,6 +108,9 @@ def s2_to_dataframe(dataset_list: dict) -> pd.DataFrame:
         lambda x: ','.join(filter(None, x)))
 
     papers = papers.drop(columns='name')
+
+    papers = papers[['paperId', 'title', 'abstract', 'venue', 'citationCount',
+                     'fieldsOfStudy', 'publicationDate', 'authorId', 'authorName']]
     return papers
 
 
@@ -132,7 +134,6 @@ def get_s2_articles_year(
             df['publicationYear'] = year
 
             pbar.set_postfix({'batch start': start_idx + 1, 'token': token})
-
             if additional_specs:
                 spec_endpoint = 'https://api.semanticscholar.org/graph/v1/paper/batch'
                 df_specs = get_s2_articles_batch(
@@ -163,7 +164,7 @@ def get_s2_articles_year(
     return df
 
 
-def s2_db_download(
+def fetch_update(
         years: Union[int, List[int]] = datetime.now().year,
         min_citations_per_year: float = s2_config['min_citations_per_year'],
         fields_of_study: Optional[List[str]] = s2_config['fields_of_study'],
@@ -184,7 +185,7 @@ def s2_db_download(
         "influentialCitationCount", "openAccessPdf", "references", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
 
     logger.info(f"will now load papers for {years} \n"
-                f"fields of study: {fields_to_return_str}\n"
+                f"fields of study: {fields_of_study_str}\n"
                 f"returning fields: {fields_to_return_str}")
 
     for year, min_citation in zip(years, citation_thresholds):
@@ -201,13 +202,14 @@ def s2_db_download(
         os.makedirs(year_text_dir, exist_ok=True)
 
         metadata_fp = os.path.join(
-            year_metadata_dir, f'\metadata_{year}.parquet')
+            year_metadata_dir, f'metadata_{year}.parquet')
         text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
         text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
 
         metadata = articles.drop(columns=['title', 'abstract'])
         text = articles[['paperId', 'title', 'abstract',
                          'referenceTitles', 'openAccessPdf']]
+        text0 = text.copy()
 
         if os.path.isfile(metadata_fp):
             old_metadata = pd.read_parquet(metadata_fp)
@@ -221,6 +223,16 @@ def s2_db_download(
             old_text = pd.read_parquet(text_fp)
             text = text.set_index("paperId").combine_first(
                 old_text.set_index("paperId")).reset_index()
+
+        # drop previous incorporation of arxiv papers that have now been
+        # incorporated into s2.
+        dupli_mask = text0.set_index("paperId").duplicated(
+            subset="title", keep=False)
+        arxiv_mask = metadata.set_index("paperId")['authorId'].isna()
+        drop_mask = dupli_mask & arxiv_mask
+        metadata = metadata.set_index("paperId")[~drop_mask].reset_index()
+        text0 = text0.set_index("paperId")[~drop_mask].reset_index()
+        text = text.set_index("paperId")[~drop_mask].reset_index()
 
         metadata.to_parquet(metadata_fp, engine="pyarrow",
                             compression="snappy", index=False)
@@ -361,12 +373,12 @@ def load_arX_dataset(downloads_dir):
     return arX_data
 
 
-def arX_db_update(
+def arX_update(
         years: Union[int, List[int]] = datetime.now().year):
 
-    downloads_dir = config.DATA_PATH / "tmp"
-    if os.path.exists(downloads_dir):
-        shutil.rmtree(downloads_dir)
+    downloads_dir = config.DATA_PATH / "tmp" / "arXiv"
+    # if os.path.exists(downloads_dir):
+    #     shutil.rmtree(downloads_dir)
     os.makedirs(downloads_dir, exist_ok=True)
 
     years = [years] if isinstance(years, int) else years
@@ -386,29 +398,14 @@ def arX_db_update(
         if os.path.isfile(text_fp):
             old_text = pd.read_parquet(text_fp)
         else:
-            old_text = None
-
-        mask = ((~old_metadata['fieldsOfStudy'].isna()) &
-                (old_metadata['publicationYear'].astype(int) == year))
-        old_text0 = old_text0[mask]
-        if old_text:
-            old_text = old_text[mask]
-        old_metadata = old_metadata.drop(columns=["update_date"])[mask]
-
-        # drop previous incorporation of arxiv papers that have now been
-        # incorporated into s2.
-        drop_idx = old_text0.duplicated(subset="title", keep=False)
-        drop_idx = drop_idx[old_metadata['authorId'].isna()]
-
-        old_metadata = old_metadata.drop(drop_idx)
-        old_text0 = old_text0.drop(drop_idx)
-        if old_text:
-            old_text = old_text.drop(drop_idx)
+            old_text = pd.DataFrame()
 
         fields = old_metadata['fieldsOfStudy'].apply(
             lambda x: x.split(',')[0]).unique()
 
-        arX_data_new = arX_data[arX_data['fieldsOfStudy'].isin(fields)]
+        field_mask = arX_data['fieldsOfStudy'].apply(
+            lambda x: any(c in fields for c in x.split(',')))
+        arX_data_new = arX_data[field_mask]
         arX_data_new = arX_data_new[~arX_data_new['title'].isin(
             old_text0)]
         arX_data_new = arX_data_new[arX_data_new['publicationYear'].astype(
@@ -424,25 +421,33 @@ def arX_db_update(
         metadata = arX_metadata.set_index("paperId").combine_first(
             old_metadata.set_index("paperId")).reset_index()
 
-        metadata.to_parquet(metadata_fp, engine="pyarrow",
-                            compression="snappy", index=False)
-
-        print(
-            f"added {len(arX_metadata)} , {len(metadata) - len(old_metadata)}")
-
         text0 = arX_text.set_index("paperId").combine_first(
             old_text0.set_index("paperId")).reset_index()
 
-        text0.to_parquet(text0_fp, engine="pyarrow",
-                         compression="snappy", index=False)
-
-        print(f"added {len(arX_text)} , {len(text0) - len(old_text0)}")
-
-        if old_text:
+        if not old_text.empty:
             text = arX_text.set_index("paperId").combine_first(
                 old_text.set_index("paperId")).reset_index()
-            text.to_parquet(text_fp, engine="pyarrow",
-                            compression="snappy", index=False)
 
-    shutil.rmtree(downloads_dir)
+        # drop arxiv papers that have already been incorporated into s2.
+        dupli_mask = text0.set_index("paperId").duplicated(
+            subset="title", keep=False)
+        arxiv_mask = metadata.set_index("paperId")['authorId'].isna()
+        drop_mask = dupli_mask & arxiv_mask
+        metadata = metadata.set_index("paperId")[~drop_mask].reset_index()
+        text0 = text0.set_index("paperId")[~drop_mask].reset_index()
+        text = text.set_index("paperId")[~drop_mask].reset_index()
+
+        metadata.to_parquet(metadata_fp, engine="pyarrow",
+                            compression="snappy", index=False)
+        text0.to_parquet(text0_fp, engine="pyarrow",
+                         compression="snappy", index=False)
+        text.to_parquet(text_fp, engine="pyarrow",
+                        compression="snappy", index=False)
+
+        logger.info(
+            f"added {len(arX_metadata)} , {len(metadata) - len(old_metadata)}")
+        logger.info(f"added {len(arX_text)} , {len(text0) - len(old_text0)}")
+        logger.info(f"added {len(arX_text)} , {len(text0) - len(old_text0)}")
+
+    # shutil.rmtree(downloads_dir)
     os.makedirs(downloads_dir, exist_ok=True)

@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from functools import partial
 
-from typing import List, Optional, Any, TypedDict, Tuple
+from typing import List, Optional, Any, TypedDict, Tuple, Union
 import pickle
 import pandas as pd
 import math
@@ -48,13 +48,17 @@ class PDFextractor:
             self,
             directory: str,
             keepPDF: Optional[bool] = False,
-            timeout: Optional[int] = 60):
+            timeout: Optional[int] = 60,
+            max_pages: Optional[Union[int, List[int]]] = [10, 5]):
 
+        max_pages = [max_pages, 0] if not isinstance(
+            max_pages, list) else max_pages
         self.directory = directory
         self.keepPDF = keepPDF
         self.timeout = timeout
-        self.processed_dir = os.path.join(self.directory, "extracted")
-        os.makedirs(self.processed_dir, exist_ok=True)
+        self.max_pages_start, self.max_pages_end = max_pages
+        self.extracted_dir = os.path.join(self.directory, "extracted")
+        os.makedirs(self.extracted_dir, exist_ok=True)
 
     def extractPDFs(self, papers: List[PaperInfo]):
         # dir_path_orig = [os.path.join(downloads_dir, pdf_data['paperId']) for pdf_data in textdata]
@@ -79,13 +83,15 @@ class PDFextractor:
                             if "valid_pages" not in paper_data.keys():
                                 paper_data["valid_pages"] = None
                             pdf_data = extract_pdf_sections(filepath,
-                                                            valid_pages=paper_data["valid_pages"])
+                                                            valid_pages=paper_data["valid_pages"],
+                                                            max_pages=[self.max_pages_start,
+                                                                       self.max_pages_end])
 
                             for key in pdf_data.keys():
                                 paper_data[key] = pdf_data[key]
                             paper_data["pdf_status"] = "extracted"
 
-                            dic_path = os.path.join(self.processed_dir,
+                            dic_path = os.path.join(self.extracted_dir,
                                                     dirname["id"] + ".pkl")
 
                             with open(dic_path, "wb") as f:
@@ -368,45 +374,49 @@ def _get_block_text_specs(text):
 
 def get_clean_block_text(text):
     if len(text) > 0:
-        try:
-            blocks, specs = _get_block_text_specs(text)
-            fs_normal_text = mode(
-                specs['fontsize'][:len(specs['fontsize'])//2])
+        # try:
+        blocks, specs = _get_block_text_specs(text)
 
-            inblocks = [blk['content'] for blk in blocks
-                        if (blk['fontsize'] >= 0.95*fs_normal_text and blk['nwords'] > 0)]
-            main_text = ' '.join(inblocks)
+        # Check if taking mode of font size on first pages works
+        fs_normal_text = mode([fs for i, fs in enumerate(specs['fontsize'])
+                               if specs['page'][i] < max(specs['page']) // 2])
 
-            main_text = ' '.join(main_text.splitlines())
+        inblocks = [blk['content'] for blk in blocks
+                    if (blk['fontsize'] >= 0.95*fs_normal_text and blk['nwords'] > 0)]
+        main_text = ' '.join(inblocks)
 
-            # Reference section should be split according to dates
-            # Embeddings of these chunks should be then averaged
-            # to give a single embedding per paper.
-            # If no ref section is present, replace it with ref titles from s2
-            # If absent in s2, replace it with average embeddings of chunks
-            ref_text = None
-            if specs['fontsize_ref']:
-                fs_ref_text = mode(
-                    specs['fontsize_ref'][:len(specs['fontsize_ref'])//2])
-                refblocks = [blk['content'] for blk in blocks
-                             if (blk['fontsize'] == fs_ref_text and blk['possible_ref'])]
-                ref_text = ' '.join(refblocks)
-                ref_text = ' '.join(ref_text.splitlines())
-                for mark in ref_markers:
-                    ref_text = ref_text.replace(mark, '')
-                    ref_text = re.sub(
-                        r'\b([A-Z][a-z]*|[A-Z])\.', r'\1', ref_text)
+        main_text = ' '.join(main_text.splitlines())
 
-        except Exception as e:
-            print(main_text)
-            raise e
+        # Reference section should be split according to dates
+        # Embeddings of these chunks should be then averaged
+        # to give a single embedding per paper.
+        # If no ref section is present, replace it with ref titles from s2
+        # If absent in s2, replace it with average embeddings of chunks
+        ref_text = None
+        if specs['fontsize_ref']:
+            fs_ref_text = mode(
+                specs['fontsize_ref'][:len(specs['fontsize_ref'])//2])
+            refblocks = [blk['content'] for blk in blocks
+                         if (blk['fontsize'] == fs_ref_text and blk['possible_ref'])]
+            ref_text = ' '.join(refblocks)
+            ref_text = ' '.join(ref_text.splitlines())
+            for mark in ref_markers:
+                ref_text = ref_text.replace(mark, '')
+                ref_text = re.sub(
+                    r'\b([A-Z][a-z]*|[A-Z])\.', r'\1', ref_text)
+
+        # except Exception as e:
+        #     logger.info(
+        #         f"Issue when cleaning pdf blocks with \n {main_text[:500]}")
+        #     raise e
 
     return main_text, ref_text
 
 
 def _extract_blocks_pdfminer(
         pdf_path: str,
-        valid_pages: Optional[List[int]] = None) -> dict:
+        valid_pages: Optional[List[int]] = None,
+        max_pages: Optional[List[int]] = None) -> dict:
 
     sections = {"full_text": None,
                 "main_text": None,
@@ -416,10 +426,13 @@ def _extract_blocks_pdfminer(
         return sections
 
     num_pages = get_pdf_num_pages(pdf_path)
+    valid_pages = list(
+        range(num_pages)) if valid_pages is None else valid_pages
 
     # Determine the most common font size (mode)
     page_width, page_height = 595, 842
     all_text_blocks, all_fontsize_blocks = [], []
+    all_page_blocks = []
     all_Bottom_blocks, all_Top_blocks = [], []
     all_Left_blocks, all_Right_blocks = [], []
     all_Bottom_words, all_Top_words = [], []
@@ -427,6 +440,11 @@ def _extract_blocks_pdfminer(
     all_nwords_blocks = []
     reached_end = False
     if num_pages > 0:
+        if num_pages > sum(max_pages):
+            page_list = list(
+                range(max_pages[0])) + list(range(num_pages-max_pages[1], num_pages))
+
+            valid_pages = [p for p in valid_pages if p in page_list]
         for p, page_layout in enumerate(extract_pages(pdf_path, page_numbers=valid_pages)):
             if reached_end:
                 break
@@ -443,6 +461,7 @@ def _extract_blocks_pdfminer(
                 filtered_text, fontsizes = _filter_text_block(element)
                 all_text_blocks.append(filtered_text)
                 all_fontsize_blocks.append(mode(fontsizes))
+                all_page_blocks.append(valid_pages[p])
                 nwords = len(filtered_text.split(' '))
                 all_nwords_blocks.append(nwords)
                 all_Bottom_blocks.append(bottom)
@@ -467,6 +486,7 @@ def _extract_blocks_pdfminer(
     right_th = np.quantile(all_Right_words, q_th)
 
     blocks = [block for i, block in enumerate(zip(all_text_blocks, all_fontsize_blocks,
+                                                  all_page_blocks,
                                                   all_Bottom_blocks, all_Top_blocks,
                                                   all_Left_blocks, all_Right_blocks,))
               if ((all_Bottom_blocks[i] > bottom_th and
@@ -478,12 +498,13 @@ def _extract_blocks_pdfminer(
     sections["full_text"] = ''.join(
         f"\n**BLOCK**"
         f"fs=={size: .1f}**"
+        f"p=={page: .1f}**"
         f"b=={bottom: .1f}**"
         f"t=={top: .1f}**"
         f"l=={left: .1f}**"
         f"r=={right: .1f}**"
         f"\n{text}"
-        for (text, size, bottom, top, left, right) in blocks)
+        for (text, size, page, bottom, top, left, right) in blocks)
 
     sections["main_text"], sections["ref_text"] = get_clean_block_text(
         sections["full_text"])
@@ -494,10 +515,11 @@ def _extract_blocks_pdfminer(
 def extract_pdf_sections(
         pdf_path: str,
         engine: str = "pdfminer",
-        valid_pages: List[int] = None) -> dict:
+        valid_pages: List[int] = None,
+        max_pages: List[int] = None) -> dict:
 
     if "pdfminer" in engine.lower():
-        return _extract_blocks_pdfminer(pdf_path, valid_pages)
+        return _extract_blocks_pdfminer(pdf_path, valid_pages, max_pages)
     else:
         raise Exception("No other option than pdfminer implemented yet")
 
@@ -578,11 +600,13 @@ def collect_extracted_PDFs(directory: str):
 def extract_worker_init(
         downloads_dir: str,
         keepPDF: Optional[bool] = False,
-        timeout: Optional[float] = 60):
+        timeout: Optional[float] = 60,
+        max_pages: Optional[Union[int, List[int]]] = [10, 5]):
     global pdfextractor
     pdfextractor = PDFextractor(downloads_dir,
                                 keepPDF=keepPDF,
-                                timeout=timeout)
+                                timeout=timeout,
+                                max_pages=max_pages)
 
 
 def extract_PDFs_workers(papers):
@@ -602,7 +626,8 @@ def _save_data(data, directory, filename):
 def extracted_to_DB(textdata, metadata):
     assert textdata['paperId'].equals(metadata['paperId'])
     id0 = textdata['paperId'].iloc[0]
-    output_dir_DB = Path(os.path.join(config.VECTORDB_PATH, "extracted", id0))
+    output_dir_DB = Path(os.path.join(
+        config.VECTORDB_PATH, "tmp", "extracted", id0))
     os.makedirs(output_dir_DB, exist_ok=False)
 
     fp_text = output_dir_DB / "text.extracted"
@@ -611,7 +636,7 @@ def extracted_to_DB(textdata, metadata):
     fp_text.with_suffix(".inprogress").rename(fp_text)
 
     fp_meta = output_dir_DB / "metadata.extracted"
-    textdata.to_parquet(fp_meta.with_suffix(".inprogress"), engine="pyarrow",
+    metadata.to_parquet(fp_meta.with_suffix(".inprogress"), engine="pyarrow",
                         compression="snappy", index=True)
     fp_meta.with_suffix(".inprogress").rename(fp_meta)
 
@@ -639,15 +664,21 @@ def extract_PDFs(
                           List[List[Any]]] = None,
         n_jobs: Optional[int] = pdf_config['n_jobs_extract'],
         timeout_per_article: Optional[float] = pdf_config['timeout_per_article'],
+        max_pages: Optional[Union[int, List[int]]] = [
+            pdf_config['max_pages_start'], pdf_config['max_pages_end']],
         pdfs_dir: Optional[str | Path] = pdf_config['save_pdfs_to'],
         keep_pdfs: Optional[bool] = pdf_config['keep_pdfs'],
         push_to_vectorDB: Optional[bool] = False,
-        done_event: Optional[bool] = None):
+        done_event: Optional[bool] = None,
+        extract_done: Optional[bool] = None):
 
+    class DummyEvent:
+        def is_set(self): return True
+        def set(self): return True
     if done_event is None:
-        class DummyEvent:
-            def is_set(self): return True
         done_event = DummyEvent()
+    if extract_done is None:
+        extract_done = DummyEvent()
 
     years = [datetime.now().year] if years is None else years
     years = [years] if not isinstance(years, list) else years
@@ -659,7 +690,6 @@ def extract_PDFs(
 
     # filters = [['abstract','==','None']]
     n_jobs = min(n_jobs, 2 * multiprocessing.cpu_count() // 3)
-    timeout_per_worker = timeout_per_article * n_jobs
     timeout_new_download = 60
 
     for year in years:
@@ -687,17 +717,21 @@ def extract_PDFs(
         ids_to_save = []
         year_ids = set(paperInfo["paperId"])
         endtime = time.time() + timeout_per_article * len(paperInfo)
-        while new_ids or not done_event.is_set():
+        while True:
             downloaded_ids = collect_downloaded_ids(downloads_dir)
             paper_ids = [id for id in downloaded_ids if id in year_ids]
 
             new_ids = [id for id in paper_ids if id not in processed_ids]
 
-            if not new_ids and not done_event.is_set():
-                time.sleep(5)
-                logger.info(
-                    f"no new data. Will wait {endtime - time.time():.1f} more seconds")
-                continue
+            if not new_ids:
+                if done_event.is_set():
+                    extract_done.set()
+                    break
+                else:
+                    time.sleep(5)
+                    logger.info(
+                        f"no new data. Will wait {endtime - time.time():.1f} more seconds")
+                    continue
 
             processed_ids = downloaded_ids
 
@@ -731,15 +765,19 @@ def extract_PDFs(
                                     extract_worker_init,
                                     downloads_dir=downloads_dir,
                                     keepPDF=keep_pdfs,
-                                    timeout=60))
+                                    timeout=60,
+                                    max_pages=max_pages))
 
+                            # valid pages as defined by max_pages should be used
+                            # throughout, ie also for checking valid pages when time is out
+                            # Check if that could also be used for font size estimation
                             with extract_pool:
                                 async_extract = [extract_pool.apply_async(extract_PDFs_workers, (b,))
                                                  for b in minibatches]
 
                                 pending_extract = set(async_extract)
 
-                                end_time = time.time() + timeout_per_article * batch_size
+                                end_time = time.time() + timeout_per_article
                                 old_pending_articles = batch_size
                                 while pending_extract:
                                     if time.time() > end_time:
@@ -768,8 +806,7 @@ def extract_PDFs(
 
                                     if n_pending_articles != old_pending_articles:
                                         if pending_extract:
-                                            extratime = (
-                                                timeout_per_worker / 2 * n_pending_articles / len(pending_extract))
+                                            extratime = timeout_per_article
                                         else:
                                             extratime = 0
 
@@ -778,8 +815,8 @@ def extract_PDFs(
 
                                         end_time = time.time() + extratime
                                         old_pending_articles = len(pending_ids)
-                                    else:
-                                        end_time = time.time() + timeout_per_worker
+                                    # else:
+                                    #     end_time = time.time() + timeout_per_worker
 
                             if TimoutRaised:
                                 # CHECK THAT THE FOLLOWING WORKS!
@@ -856,7 +893,7 @@ def extract_PDFs(
                                     'None')
                                 paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
 
-                            if len(ids_to_save) > 256:
+                            if len(ids_to_save) > 128:
                                 pbar.set_postfix(
                                     {"status": f"Saving {len(ids_to_save)} new articles"})
                                 output_dir_year = os.path.join(

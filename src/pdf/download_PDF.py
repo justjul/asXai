@@ -40,7 +40,7 @@ class PaperInfo(TypedDict):
 class PDFdownloader:
     def __init__(self,
                  downloads_dir: str,
-                 source: str = "s2",
+                 source: str = "http",
                  headless: Optional[bool] = False,
                  worker_id: Optional[int] = 0,
                  timeout_loadpage: Optional[float] = 15,
@@ -54,7 +54,7 @@ class PDFdownloader:
         temp_dir = tempfile.gettempdir()
         self.user_data_dir = tempfile.mkdtemp(
             prefix=f"chrome-profile-{self.worker_id}-", dir=temp_dir)
-        if self.source == "s2":
+        if self.source == "http":
             self.driver = self._s2_init_driver(headless)
         else:
             self.driver = None
@@ -132,9 +132,9 @@ class PDFdownloader:
         self.queue = []
 
     def download(self, paperInfo: PaperInfo):
-        if self.source == "s2":
+        if self.source == "http":
             paperInfo = self._s2_download(paperInfo)
-        elif self.source.lower() == "arxiv":
+        elif self.source.lower() == "gs":
             paperInfo = self._arX_download(paperInfo)
 
         return paperInfo
@@ -210,7 +210,7 @@ class PDFdownloader:
 
         self.queue.append(paperInfo["paperId"])
         try:
-            subprocess.run(["gsutil", "cp", paperInfo["openAccessPdf"],
+            subprocess.run(["gsutil", "-q", "cp", paperInfo["openAccessPdf"],
                             str(paper_download_dir)], check=True)
             endtime = time.time() + self.timeout_loadpage
             download_status = "download too long"
@@ -251,7 +251,7 @@ def close_all_chrome_sessions(verbose: bool = True):
 
 def download_worker_init(
         downloads_dir: str,
-        source: str = "s2",
+        source: str = "http",
         timeout_loadpage: Optional[float] = 15,
         timeout_startdw: Optional[float] = 5):
     global downloader
@@ -339,7 +339,7 @@ def download_PDFs(
 
         paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
                        "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
-        external_sources = {"http", "gs"}
+        external_sources = ["http", "gs"]
         for source in external_sources:
             if source is not None:
                 paperInfo_s = paperInfo[paperInfo["openAccessPdf"].str.startswith(
@@ -375,6 +375,7 @@ def download_PDFs(
                                 download_pool = multiprocessing.Pool(
                                     processes=n_jobs,
                                     initializer=partial(download_worker_init,
+                                                        source=source,
                                                         downloads_dir=downloads_dir,
                                                         timeout_loadpage=timeout_loadpage,
                                                         timeout_startdw=timeout_startdw))

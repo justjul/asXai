@@ -40,7 +40,7 @@ class QdrantManager:
                  clean_after_push: bool = True):
 
         self.volume_path = config.VECTORDB_PATH / "Qdrant"
-        self.tmp_path = config.VECTORDB_PATH / "tmp"
+        self.tmp_path = config.VECTORDB_PATH / "tmp" / "embeddings"
         self.container_name = config.PROJECT_NAME + "-Qdrant"
         self.collection_name = model_name.split('/')[-1]
         self.model_name = model_name
@@ -168,18 +168,22 @@ class QdrantManager:
         embeddings = data['embeddings']
         payloads = data['payloads']
         ref_embedding = data['ref_embedding']
+        paperId_Qrant = str(uuid.uuid5(
+            namespace=uuid.NAMESPACE_DNS, name=f"{paperId}"))
+        id_points = [PointStruct(id=paperId_Qrant,
+                                 vector=ref_embedding,
+                                 payload={'paperIdQ': paperId_Qrant,
+                                          **{field: payloads[0][field] for field in self.id_fields}})]
+
+        await self.client.upsert(collection_name=self.collection_name_ids, points=id_points)
+
         chunk_points = [PointStruct(id=str(uuid.uuid5(namespace=uuid.NAMESPACE_DNS, name=f"{paperId}_{i}")),
-                                    vector=emb, payload={field: payloads[i][field] for field in self.chunk_fields})
+                                    vector=emb,
+                                    payload={'paperIdQ': paperId_Qrant,
+                                             **{field: payloads[i][field] for field in self.chunk_fields}})
                         for i, emb in enumerate(embeddings)]
 
         await self.client.upsert(collection_name=self.collection_name_chunks, points=chunk_points)
-        try:
-            id_points = [PointStruct(id=str(uuid.uuid5(namespace=uuid.NAMESPACE_DNS, name=f"{paperId}")),
-                                     vector=ref_embedding, payload={field: payloads[0][field] for field in self.id_fields})]
-        except Exception as e:
-            print(paperId)
-            raise e
-        await self.client.upsert(collection_name=self.collection_name_ids, points=id_points)
 
         if self.clean_after_push:
             os.remove(file_path)
@@ -217,9 +221,13 @@ class QdrantManager:
 
         new_ids = self.get_embedding_ids()
         pushed_ids = []
-        while new_ids or not done_event.is_set():
+        while True:
             paper_ids = self.get_embedding_ids()
             new_ids = [id for id in paper_ids if id not in pushed_ids]
+
+            if not new_ids and done_event.is_set():
+                break
+
             if new_ids:
                 await self.delete_papers(new_ids)
 
@@ -243,10 +251,15 @@ class QdrantManager:
                     topK: int = 5,
                     topK_per_paper: int = 5,
                     filter_by_paper_ids: Union[List[str], None] = None,
-                    filter_payloads: Union[dict, None] = None):
+                    filter_payloads: Union[dict, None] = None,
+                    collection_name: str = None,
+                    **kwargs):
 
         if not hasattr(self, 'client'):
             self.client = AsyncQdrantClient(host=self.host, port=self.port)
+
+        if collection_name is None:
+            collection_name = self.collection_name_chunks
 
         must_conditions = []
 
@@ -263,17 +276,17 @@ class QdrantManager:
             must=must_conditions) if must_conditions else None
 
         results = await self.client.query_points_groups(
-            collection_name=self.collection_name_chunks,
+            collection_name=collection_name,
             query=query_vector,
             query_filter=query_filter,
-            group_by="paperId",
+            group_by="paperIdQ",
             limit=topK,  # Max amount of groups
             group_size=topK_per_paper,  # Max amount of points per group
             with_lookup=WithLookup(
                 collection=self.collection_name_ids,
-                with_payload=["title", "abstract", "text"],
-                with_vectors=False,),
-            with_payload=True)
+                with_payload=True),
+            with_payload=True,
+            **kwargs)
 
         return results
 

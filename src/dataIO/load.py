@@ -14,6 +14,7 @@ from functools import partial
 
 logger = get_logger(__name__, level=logging.INFO)
 
+# Load parameters from config
 params = load_params()
 load_config = params["load"]
 
@@ -24,6 +25,8 @@ class paperData(TypedDict):
 
 
 class DataSetManager:
+    """Class to load and filter metadata and text data."""
+
     def __init__(
             self,
             data_types: Union[str, List[str]] = ["metadata", "text"],

@@ -49,7 +49,7 @@ def chunk_text(
     for sent in sentences_norm:
         tokenized = tokenizer.encode(
             sent.strip(), add_special_tokens=False)
-        if len(tokenized) > chunk_size - prefix_len:
+        if len(tokenized) > chunk_size - prefix_len + 5:
             print(sent)
             raise Exception(
                 "There's still a text chunk larger than chunk_size")
@@ -201,22 +201,24 @@ class PaperEmbed:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
 
-        self.model, self.tokenizer = self.load_model()
+        self.model, self.tokenizer, self.chunk_tokenizer = self.load_model()
 
         self.chunk_size = min(chunk_size, self.tokenizer.model_max_length//3
                               ) if chunk_size else self.tokenizer.model_max_length//3
         self.max_chunks = max_chunks
         self.chunk_batch_size = chunk_batch_size
         self.paper_batch_size = paper_batch_size
-        self.cache_dir = config.VECTORDB_PATH / "tmp"
+        self.cache_dir = config.VECTORDB_PATH / "tmp" / "embeddings"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.n_jobs = n_jobs
 
     def load_model(self):
+        chunk_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         model = AutoModel.from_pretrained(
-            self.model_name).to(self.device).eval()
-        return model, tokenizer
+            self.model_name,
+            torch_dtype=torch.float16).to(self.device).eval()
+        return model, tokenizer, chunk_tokenizer
 
     def unload_model(self):
         del self.model
@@ -287,8 +289,8 @@ class PaperEmbed:
             for i in pbar:
                 paperBatch = papers[i:i+self.paper_batch_size]
                 doc_prefix = self._model_prefix(tokenized=True)
-                futures = [chunk_executor.submit(
-                    load_and_chunk, paper, self.tokenizer,
+                tasks = [chunk_executor.submit(
+                    load_and_chunk, paper, self.chunk_tokenizer,
                     self.chunk_size, self.max_chunks, len(doc_prefix)) for paper in paperBatch]
 
                 batched_texts = []
@@ -297,7 +299,8 @@ class PaperEmbed:
                 batched_payloads = []
                 all_paper_ids = []
                 chunk_counts = []
-                for future in as_completed(futures):
+                n_papers = len(tasks)
+                for k, future in enumerate(as_completed(tasks), 1):
                     try:
                         paper_id, texts, masks, payloads = future.result()
                         if len(texts) > 1:
@@ -308,35 +311,45 @@ class PaperEmbed:
                             all_paper_ids.append(paper_id)
                             chunk_counts.append(len(texts))
                     except Exception as e:
-                        print(f"Failed to chunk")
+                        print("Failed to chunk")
                         raise e
 
-                sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
-                                          batched_ids), key=lambda x: len(x[0]))
-                if sorted_batch:
-                    batched_texts, batched_masks, batched_payloads, batched_ids = list(
-                        zip(*sorted_batch))
+                    if (len(all_paper_ids) == self.chunk_batch_size
+                            or k == n_papers):
+                        sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
+                                                  batched_ids), key=lambda x: len(x[0]))
+                        if sorted_batch:
+                            batched_texts, batched_masks, batched_payloads, batched_ids = list(
+                                zip(*sorted_batch))
 
-                    doc_prefix = self._model_prefix(tokenized=False)
-                    embeddings = self.compute_embeddings(texts=batched_texts,
-                                                         masks=batched_masks,
-                                                         prefix=doc_prefix)
+                            doc_prefix = self._model_prefix(tokenized=False)
+                            embeddings = self.compute_embeddings(texts=batched_texts,
+                                                                 masks=batched_masks,
+                                                                 prefix=doc_prefix)
 
-                for paper_id in all_paper_ids:
-                    ref_embedding = torch.stack([emb for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
-                                                 if id == paper_id and payload['is_ref']])
-                    ref_embedding = ref_embedding.mean(dim=0).tolist()
-                    embeded_data = {
-                        "embeddings": [
-                            emb.tolist() for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
-                            if id == paper_id and not payload['is_ref']],
-                        "payloads": [
-                            payload for id, payload in zip(batched_ids, batched_payloads)
-                            if id == paper_id and not payload['is_ref']],
-                        "ref_embedding": ref_embedding}
-                    if embeded_data["embeddings"]:
-                        save_executor.submit(
-                            save_embeddings, paper_id, embeded_data, self.cache_dir)
+                        for paper_id in all_paper_ids:
+                            ref_embedding = torch.stack([emb for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
+                                                        if id == paper_id and payload['is_ref']])
+                            ref_embedding = ref_embedding.mean(dim=0).tolist()
+                            embeded_data = {
+                                "embeddings": [
+                                    emb.tolist() for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
+                                    if id == paper_id and not payload['is_ref']],
+                                "payloads": [
+                                    payload for id, payload in zip(batched_ids, batched_payloads)
+                                    if id == paper_id and not payload['is_ref']],
+                                "ref_embedding": ref_embedding}
+                            if embeded_data["embeddings"]:
+                                save_executor.submit(
+                                    save_embeddings, paper_id, embeded_data, self.cache_dir)
+                                # save_embeddings(paper_id, embeded_data, self.cache_dir)
+
+                        batched_texts = []
+                        batched_ids = []
+                        batched_masks = []
+                        batched_payloads = []
+                        all_paper_ids = []
+                        chunk_counts = []
 
         chunk_executor.shutdown(wait=True)
         save_executor.shutdown(wait=True)
