@@ -51,7 +51,6 @@ def download_and_extract(**kwargs):
                 'pdfs_dir': kwargs['save_pdfs_to'],
                 'keep_pdfs': kwargs['keep_pdfs'],
                 'push_to_vectorDB': kwargs.get('push_to_vectorDB', False),
-                'done_event': done_event,
                 'extract_done': kwargs.get('extract_done', None)})
 
     extract_proc.start()
@@ -81,7 +80,7 @@ def run_embedding(
             producer.batch_embeddings(paperdata)
     else:
         extracted_dir = Path(os.path.join(
-            config.VECTORDB_PATH, "tmp", "extracted"))
+            config.TMP_PATH, "extracted"))
         os.makedirs(extracted_dir, exist_ok=True)
         while True:
             extracted_batches = collect_extracted_batch(extracted_dir)

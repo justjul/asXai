@@ -20,8 +20,8 @@ def get_tqdm():
         return std_tqdm
 
 
-def load_params(config_path: Path = Path("../params.yaml")):
-    with open(config_path, "r") as f:
+def load_params(params_path: Path = Path("../params.yaml")):
+    with open(params_path, "r") as f:
         params = yaml.safe_load(f)
 
     params["qdrant"]["model_name"] = params["embedding"]["model_name"]

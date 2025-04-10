@@ -10,6 +10,7 @@ from qdrant_client.models import TokenizerType, TextIndexParams
 from qdrant_client.models import Filter, FieldCondition
 from qdrant_client.models import MatchValue, MatchAny
 from qdrant_client.models import WithLookup
+from httpx import Timeout
 
 from typing import List, Tuple, Union, TypedDict, AsyncGenerator
 from pathlib import Path
@@ -40,7 +41,7 @@ class QdrantManager:
                  clean_after_push: bool = True):
 
         self.volume_path = config.VECTORDB_PATH / "Qdrant"
-        self.tmp_path = config.VECTORDB_PATH / "tmp" / "embeddings"
+        self.tmp_path = config.TMP_PATH / "embeddings"
         self.container_name = config.PROJECT_NAME + "-Qdrant"
         self.collection_name = model_name.split('/')[-1]
         self.model_name = model_name
@@ -67,7 +68,9 @@ class QdrantManager:
         self.clean_after_push = clean_after_push
 
         self.start_qdrant_container()
-        self.client = AsyncQdrantClient(host=self.host, port=self.port)
+        self.client = AsyncQdrantClient(host=self.host,
+                                        port=self.port,
+                                        timeout=60.0)
 
     def start_qdrant_container(self):
         client = docker.from_env()
@@ -81,17 +84,23 @@ class QdrantManager:
         except docker.errors.NotFound:
             logger.info(
                 "No Qdrant container running. Starting a new one now...")
-            container = client.containers.run(image="qdrant/qdrant",
-                                              name=self.container_name,
-                                              ports={
-                                                  f"{self.port}/tcp": self.port},
-                                              volumes={
-                                                  str(self.volume_path): {
-                                                      'bind': '/qdrant/storage',
-                                                      'mode': 'rw'
-                                                  }
-                                              },
-                                              detach=True)
+            n_attempt = 0
+            while n_attempt < 10:
+                n_attempt += 1
+                try:
+                    container = client.containers.run(image="qdrant/qdrant",
+                                                      name=self.container_name,
+                                                      ports={
+                                                          f"{self.port}/tcp": self.port},
+                                                      volumes={
+                                                          str(self.volume_path): {
+                                                              'bind': '/qdrant/storage',
+                                                              'mode': 'rw'
+                                                          }
+                                                      },
+                                                      detach=True)
+                except Exception:
+                    time.sleep(5)
 
         ready = False
         endtime = time.time() + self.docker_timeout

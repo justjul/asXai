@@ -132,6 +132,7 @@ def get_s2_articles_year(
             token = dataset_list.get('token')
             df = s2_to_dataframe(dataset_list)
             df['publicationYear'] = year
+            df['source'] = 's2'
 
             pbar.set_postfix({'batch start': start_idx + 1, 'token': token})
             if additional_specs:
@@ -357,6 +358,7 @@ def arX_to_dataframe(arX_data: pd.DataFrame) -> pd.DataFrame:
     arX_norm["publicationDate"] = arX_norm["publicationDate"].dt.strftime(
         date_format="%Y-%m-%d")
     arX_norm = arX_norm.drop(columns=["update_date"])
+    arX_norm['source'] = 'arXiv'
 
     return arX_norm
 
@@ -376,7 +378,7 @@ def load_arX_dataset(downloads_dir):
 def arX_update(
         years: Union[int, List[int]] = datetime.now().year):
 
-    downloads_dir = config.DATA_PATH / "tmp" / "arXiv"
+    downloads_dir = config.TMP_PATH / "arXiv"
     # if os.path.exists(downloads_dir):
     #     shutil.rmtree(downloads_dir)
     os.makedirs(downloads_dir, exist_ok=True)

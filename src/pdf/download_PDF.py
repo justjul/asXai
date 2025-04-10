@@ -279,6 +279,11 @@ def download_PDF_workers(papers):
     return output
 
 
+def downloaded_year_done(directory: str):
+    folder_list = os.listdir(directory)
+    return 'done' in folder_list
+
+
 def collect_downloaded_ids(directory: str):
     folder_list = os.listdir(directory)
     paper_downloaded = []
@@ -307,7 +312,7 @@ def download_PDFs(
     if save_pdfs_to is not None:
         downloads_dir_base = save_pdfs_to
     else:
-        downloads_dir_base = config.DATA_PATH / "tmp" / "download"
+        downloads_dir_base = config.TMP_PATH / "download"
 
     for year in years:
         downloads_dir = downloads_dir_base / str(year)
@@ -339,7 +344,7 @@ def download_PDFs(
 
         paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
                        "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
-        external_sources = ["http", "gs"]
+        external_sources = ["http"]  # , "gs"]
         for source in external_sources:
             if source is not None:
                 paperInfo_s = paperInfo[paperInfo["openAccessPdf"].str.startswith(
@@ -349,8 +354,8 @@ def download_PDFs(
 
             if not paperInfo_s.empty:
                 minibatch_size = 20  # 100
-                batch_size = 1000
-                Npapers = 1000  # len(paperInfo_s)
+                batch_size = 300
+                Npapers = 650  # len(paperInfo_s)
                 tqdm = get_tqdm()
                 with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
                           desc=f"Downloading {Npapers} papers from {year}") as pbar:
@@ -420,6 +425,8 @@ def download_PDFs(
                     except Exception as e:
                         pbar.close()
                         raise e
+
+        os.mkdir(os.path.join(downloads_dir, 'done'))
 
     if done_event is not None:
         done_event.set()

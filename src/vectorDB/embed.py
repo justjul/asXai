@@ -131,15 +131,15 @@ def load_and_chunk(paperData: dict,
     payloads = [{**paperInfo, "text": chunk, "is_ref": False}
                 for chunk in masked_chunks["chunks"]]
 
-    ref_chunks = chunk_text(paperData["ref_text"], tokenizer,
-                            chunk_size=chunk_size,
-                            max_chunks=max_chunks,
-                            prefix_len=prefix_len)
-    texts.extend(ref_chunks["chunks"])
-    masks.extend(ref_chunks["masks"])
-    paperInfo = paperData.copy()
-    payloads.extend([{**paperInfo, "text": chunk, "is_ref": True}
-                     for chunk in ref_chunks["chunks"]])
+    # ref_chunks = chunk_text(paperData["ref_text"], tokenizer,
+    #                         chunk_size=chunk_size,
+    #                         max_chunks=max_chunks,
+    #                         prefix_len=prefix_len)
+    # texts.extend(ref_chunks["chunks"])
+    # masks.extend(ref_chunks["masks"])
+    # paperInfo = paperData.copy()
+    # payloads.extend([{**paperInfo, "text": chunk, "is_ref": True}
+    #                  for chunk in ref_chunks["chunks"]])
 
     return paper_id, texts, masks, payloads
 
@@ -160,7 +160,8 @@ def get_normalized_textdata(textdata):
         lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
 
     mask = papertext["ref_text"].str.len() < 500
-    papertext.loc[mask, "ref_text"] = papertext.loc[mask, "main_text"]
+    papertext.loc[mask, "ref_text"] = papertext.loc[mask].apply(
+        lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
 
     papertext = papertext[['paperId', 'main_text', 'ref_text', 'pdf_extracted', 'title',
                            'abstract',]]
@@ -208,7 +209,7 @@ class PaperEmbed:
         self.max_chunks = max_chunks
         self.chunk_batch_size = chunk_batch_size
         self.paper_batch_size = paper_batch_size
-        self.cache_dir = config.VECTORDB_PATH / "tmp" / "embeddings"
+        self.cache_dir = config.TMP_PATH / "embeddings"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.n_jobs = n_jobs
 
@@ -328,16 +329,16 @@ class PaperEmbed:
                                                                  prefix=doc_prefix)
 
                         for paper_id in all_paper_ids:
-                            ref_embedding = torch.stack([emb for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
-                                                        if id == paper_id and payload['is_ref']])
+                            ref_embedding = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
+                                                        if id == paper_id])
                             ref_embedding = ref_embedding.mean(dim=0).tolist()
                             embeded_data = {
                                 "embeddings": [
-                                    emb.tolist() for id, emb, payload in zip(batched_ids, embeddings, batched_payloads)
-                                    if id == paper_id and not payload['is_ref']],
+                                    emb.tolist() for id, emb in zip(batched_ids, embeddings)
+                                    if id == paper_id],
                                 "payloads": [
                                     payload for id, payload in zip(batched_ids, batched_payloads)
-                                    if id == paper_id and not payload['is_ref']],
+                                    if id == paper_id],
                                 "ref_embedding": ref_embedding}
                             if embeded_data["embeddings"]:
                                 save_executor.submit(

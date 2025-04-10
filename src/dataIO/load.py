@@ -38,6 +38,7 @@ class DataSetManager:
     def _load_subset(
             self,
             subset: Union[int, str, List[str], List[int]] = None) -> paperData:
+        """Loads metadata and/or text data for a specific year or subset."""
 
         data_path = {
             "metadata": config.METADATA_PATH,
@@ -55,12 +56,11 @@ class DataSetManager:
             file_name = f"{dtype}_{subset}.parquet"
             file_path = path / subset / file_name
 
-            if i == 0:
-                _filters = self.filters
-            else:
-                _filters = [('paperId', 'in', paperIds)]
+            # Define filters
+            _filters = self.filters if i == 0 else [
+                ('paperId', 'in', paperIds)]
 
-            # fallback for missing pdf parquet
+            # fallback text file not found
             if not file_path.exists():
                 file_name = f"{dtype}0_{subset}.parquet"
                 file_path = path / subset / file_name

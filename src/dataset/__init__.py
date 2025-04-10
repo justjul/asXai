@@ -1,4 +1,4 @@
-from .download_paperDB import fetch_update, arX_update
+from .download import fetch_update, arX_update
 from .extract_embed_and_push import process
 
 __all__ = [
