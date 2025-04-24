@@ -1,6 +1,5 @@
 import config
 from src.utils import load_params
-from dataIO.load import load_data
 from functools import partial
 import multiprocessing
 from typing import List, Optional, Any, TypedDict
@@ -133,13 +132,13 @@ class PDFdownloader:
 
     def download(self, paperInfo: PaperInfo):
         if self.source == "http":
-            paperInfo = self._s2_download(paperInfo)
+            paperInfo = self._http_download(paperInfo)
         elif self.source.lower() == "gs":
-            paperInfo = self._arX_download(paperInfo)
+            paperInfo = self._gs_download(paperInfo)
 
         return paperInfo
 
-    def _s2_download(self, paperInfo: PaperInfo):
+    def _http_download(self, paperInfo: PaperInfo):
         try:
             extensions = ("*.pdf", "*.crdownload")
             paper_download_dir = os.path.join(
@@ -202,30 +201,49 @@ class PDFdownloader:
                         pass
         return True
 
-    def _arX_download(self, paperInfo: PaperInfo):
+    def _gs_download(self, paperInfo: PaperInfo):
         extensions = ("*.pdf")
         paper_download_dir = os.path.join(
             self.downloads_dir, paperInfo["paperId"])
         os.makedirs(paper_download_dir, exist_ok=True)
 
         self.queue.append(paperInfo["paperId"])
-        try:
-            subprocess.run(["gsutil", "-q", "cp", paperInfo["openAccessPdf"],
-                            str(paper_download_dir)], check=True)
-            endtime = time.time() + self.timeout_loadpage
-            download_status = "download too long"
-            while time.time() < endtime:
-                filename = [fname
-                            for ext in extensions
-                            for fname in glob.glob(os.path.join(paper_download_dir, ext))
-                            ]
-                if filename:
-                    download_status = "downloaded"
-                    break
-                else:
+
+        pdf_url = paperInfo["openAccessPdf"]
+        version_match = re.search(r"v(\d+)\.pdf$", pdf_url)
+
+        download_status = "broken link?"
+        n_attempts = 3
+
+        for retry in range(n_attempts + 1):
+            try:
+                if retry > 0 and version_match:
+                    version = int(version_match.group(1)) - retry
+                    if version <= 0:
+                        break
+                    pdf_url = re.sub(r"v\d+\.pdf$", f"v{version}.pdf", pdf_url)
+
+                subprocess.run(["gsutil", "-q", "cp",
+                                pdf_url, str(paper_download_dir)], check=True)
+                endtime = time.time() + self.timeout_loadpage
+                download_status = "download too long"
+                while time.time() < endtime:
+                    filename = [fname
+                                for ext in extensions
+                                for fname in glob.glob(os.path.join(paper_download_dir, ext))
+                                ]
+                    if filename:
+                        download_status = "downloaded"
+                        break
                     time.sleep(0.2)
-        except Exception as e:
-            download_status = "broken link?"
+
+                if download_status == "downloaded":
+                    break
+            except subprocess.CalledProcessError:
+                continue
+            except Exception as e:
+                logger.warning(f"Unexpected error: {e}")
+                break
 
         paperInfo["pdf_status"] = download_status
 
@@ -253,11 +271,12 @@ def download_worker_init(
         downloads_dir: str,
         source: str = "http",
         timeout_loadpage: Optional[float] = 15,
-        timeout_startdw: Optional[float] = 5):
+        timeout_startdw: Optional[float] = 5,
+        run_headless: Optional[float] = False):
     global downloader
     downloader = PDFdownloader(downloads_dir,
                                source=source,
-                               headless=False,
+                               headless=run_headless,
                                worker_id=os.getpid(),
                                timeout_loadpage=timeout_loadpage,
                                timeout_startdw=timeout_startdw)
@@ -297,138 +316,114 @@ def collect_downloaded_ids(directory: str):
 
 
 def download_PDFs(
-        years: Optional[int] = None,
-        filters: Optional[List[Any] |
-                          List[List[Any]]] = None,
+        paperdata: pd.DataFrame,
+        year: int,
         n_jobs: Optional[int] = pdf_config['n_jobs_download'],
         timeout_loadpage: Optional[float] = pdf_config['timeout_loadpage'],
         timeout_startdw: Optional[float] = pdf_config['timeout_startdw'],
         save_pdfs_to: Optional[str] = pdf_config['save_pdfs_to'],
-        done_event=None):
-
-    years = [datetime.now().year] if years is None else years
-    years = [years] if not isinstance(years, list) else years
+        run_headless: Optional[bool] = pdf_config['run_headless']):
 
     if save_pdfs_to is not None:
         downloads_dir_base = save_pdfs_to
     else:
         downloads_dir_base = config.TMP_PATH / "download"
 
-    for year in years:
-        downloads_dir = downloads_dir_base / str(year)
-        os.makedirs(downloads_dir, exist_ok=True)
-
-    # filters = [['abstract','==','None']]
     n_jobs = min(n_jobs, 20)
     results = []
-    for year in years:
-        downloads_dir = downloads_dir_base / str(year)
+    downloads_dir = downloads_dir_base / str(year)
+    os.makedirs(downloads_dir, exist_ok=True)
 
-        logger.info(f"Downloading pdfs for year {year}")
-        paperdata = load_data(subsets=year,
-                              data_types=["metadata", "text"])
+    logger.info(f"Downloading pdfs for year {year}")
+    paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
+                         paperdata["metadata"][[
+                             "paperId", "authorName"]],
+                         on="paperId",
+                         how="inner")
 
-        if filters is not None:
-            paperdata_filt = load_data(subsets=year,
-                                       data_types=[
-                                           "text", "metadata"],
-                                       filters=filters)
+    paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
+                   "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
+    external_sources = ["http", "gs"]
+    for source in external_sources:
+        if source is not None:
+            paperInfo_s = paperInfo[paperInfo["openAccessPdf"].str.startswith(
+                source)]
         else:
-            paperdata_filt = paperdata
+            paperInfo_s = paperInfo
 
-        paperInfo = pd.merge(paperdata_filt["text"][["paperId", "openAccessPdf"]],
-                             paperdata_filt["metadata"][[
-                                 "paperId", "authorName"]],
-                             on="paperId",
-                             how="inner")
+        if not paperInfo_s.empty:
+            minibatch_size = 20  # 100
+            batch_size = 512
+            Npapers = len(paperInfo_s)
+            tqdm = get_tqdm()
+            with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
+                      desc=f"Downloading {Npapers} papers from {year}") as pbar:
+                try:
+                    for i in pbar:
+                        close_all_chrome_sessions()
+                        print(downloads_dir)
+                        endtime = time.time() + timeout_loadpage * batch_size
 
-        paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
-                       "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
-        external_sources = ["http"]  # , "gs"]
-        for source in external_sources:
-            if source is not None:
-                paperInfo_s = paperInfo[paperInfo["openAccessPdf"].str.startswith(
-                    source)]
-            else:
-                paperInfo_s = paperInfo
+                        batch = paperInfo_s.iloc[i *
+                                                 batch_size: (i+1)*batch_size].to_dict(orient="records")
 
-            if not paperInfo_s.empty:
-                minibatch_size = 20  # 100
-                batch_size = 300
-                Npapers = 650  # len(paperInfo_s)
-                tqdm = get_tqdm()
-                with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
-                          desc=f"Downloading {Npapers} papers from {year}") as pbar:
-                    try:
-                        for i in pbar:
+                        Nbatch = len(batch)
+                        minibatches = [batch[k * minibatch_size: min(Nbatch, (k + 1) * minibatch_size)]
+                                       for k in range(Nbatch // minibatch_size + 1)]
+
+                        minibatches = [b for b in minibatches
+                                       if len(b) > 0 and b[0] is not None]
+
+                        if minibatches:
+                            pdf_downloaded, pdf_new = [], []
+                            download_pool = multiprocessing.Pool(
+                                processes=n_jobs,
+                                initializer=partial(download_worker_init,
+                                                    source=source,
+                                                    downloads_dir=downloads_dir,
+                                                    timeout_loadpage=timeout_loadpage,
+                                                    timeout_startdw=timeout_startdw,
+                                                    run_headless=run_headless))
+
+                            with download_pool:
+                                async_dwload = [download_pool.apply_async(download_PDF_workers, (b,))
+                                                for b in minibatches]
+                                pending_dwload = set(async_dwload)
+
+                                while pending_dwload:
+                                    if len(pdf_new) == 0 and time.time() > endtime:
+                                        logger.info(
+                                            f"{len(pending_dwload)} downloads out of {len(minibatches)} timed out. Terminating the pool.")
+
+                                        download_pool.terminate()
+                                        download_pool.join()
+                                        break
+
+                                    pdf_dw = collect_downloaded_ids(
+                                        downloads_dir)
+                                    pdf_new = [
+                                        pdf for pdf in pdf_dw if pdf not in pdf_downloaded]
+
+                                    for task in list(pending_dwload):
+                                        if task.ready():
+                                            res_dw = task.get()
+                                            results.append(res_dw)
+                                            pending_dwload.remove(task)
+
+                                    if pending_dwload:
+                                        pbar.set_postfix(
+                                            {"download tasks": f"{len(pending_dwload)} left"})
+
+                                        time.sleep(1)
+
+                                    pdf_downloaded = pdf_dw
+                                    if len(pdf_new) > 0:
+                                        endtime = time.time() + 3*timeout_loadpage
+
                             close_all_chrome_sessions()
-                            print(downloads_dir)
-                            endtime = time.time() + timeout_loadpage * batch_size
 
-                            batch = paperInfo_s.iloc[i *
-                                                     batch_size: (i+1)*batch_size].to_dict(orient="records")
+                except Exception as e:
+                    pbar.close()
+                    raise e
 
-                            Nbatch = len(batch)
-                            minibatches = [batch[k * minibatch_size: min(Nbatch, (k + 1) * minibatch_size)]
-                                           for k in range(Nbatch // minibatch_size + 1)]
-
-                            minibatches = [b for b in minibatches
-                                           if len(b) > 0 and b[0] is not None]
-
-                            if minibatches:
-                                pdf_downloaded, pdf_new = [], []
-                                download_pool = multiprocessing.Pool(
-                                    processes=n_jobs,
-                                    initializer=partial(download_worker_init,
-                                                        source=source,
-                                                        downloads_dir=downloads_dir,
-                                                        timeout_loadpage=timeout_loadpage,
-                                                        timeout_startdw=timeout_startdw))
-
-                                with download_pool:
-                                    async_dwload = [download_pool.apply_async(download_PDF_workers, (b,))
-                                                    for b in minibatches]
-                                    pending_dwload = set(async_dwload)
-
-                                    while pending_dwload:
-                                        if len(pdf_new) == 0 and time.time() > endtime:
-                                            logger.info(
-                                                f"{len(pending_dwload)} downloads out of {len(minibatches)} timed out. Terminating the pool.")
-
-                                            download_pool.terminate()
-                                            download_pool.join()
-                                            break
-
-                                        pdf_dw = collect_downloaded_ids(
-                                            downloads_dir)
-                                        pdf_new = [
-                                            pdf for pdf in pdf_dw if pdf not in pdf_downloaded]
-
-                                        for task in list(pending_dwload):
-                                            if task.ready():
-                                                res_dw = task.get()
-                                                results.append(res_dw)
-                                                pending_dwload.remove(task)
-
-                                        if pending_dwload:
-                                            pbar.set_postfix(
-                                                {"download tasks": f"{len(pending_dwload)} left"})
-
-                                            time.sleep(1)
-
-                                        pdf_downloaded = pdf_dw
-                                        if len(pdf_new) > 0:
-                                            endtime = time.time() + 3*timeout_loadpage
-
-                                close_all_chrome_sessions()
-
-                    except Exception as e:
-                        pbar.close()
-                        raise e
-
-        os.mkdir(os.path.join(downloads_dir, 'done'))
-
-    if done_event is not None:
-        done_event.set()
-
-    return results
+    os.mkdir(os.path.join(downloads_dir, 'done'))

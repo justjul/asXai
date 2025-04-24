@@ -1,15 +1,15 @@
 embedding:
   model_name: intfloat/multilingual-e5-large-instruct
-  chunk_size: 85 #null
-  max_chunks: 10 #20
-  chunk_batch_size: 64
-  paper_batch_size: 1000
-  n_jobs: 20
+  chunk_size: 170 #85 #null
+  max_chunks: 20 #10
+  chunk_batch_size: 32
+  paper_batch_size: 1000 #256//20
+  n_jobs: 40
 
 qdrant:
   docker_timeout: 30.0
   watch_tmp_timeout: 60.0
-  max_threads: 20
+  max_threads: 5
   port: 6333
   host: localhost
 
@@ -34,6 +34,7 @@ pdf:
   n_jobs_download: 20
   n_jobs_extract: 40
   timeout_per_article: 15
+  run_headless: True
   max_pages_start: 20
   max_pages_end: null
   extract_ref: False

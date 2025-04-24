@@ -12,7 +12,6 @@ import pandas as pd
 import math
 
 import multiprocessing
-from dataIO.load import load_data
 from pdf.download_PDF import collect_downloaded_ids, downloaded_year_done
 
 import config
@@ -207,8 +206,8 @@ def get_valid_pages(
                 if len(valid_pages) < n_pages:
                     missing_pages = [
                         p for p in page_list if p not in valid_pages]
-                    logger.warning(
-                        f"Timeout on page {missing_pages} out of {n_pages} for {pdf_path}")
+                    # logger.warning(
+                    #     f"Timeout on page {missing_pages} out of {n_pages} for {pdf_path}")
 
     except Exception as e:
         logger.warning(f"Error reading PDF {pdf_path}: {e}")
@@ -452,9 +451,11 @@ def extract_PDFs_workers(papers):
     return output
 
 
-def _save_data(data, directory, filename):
-    os.makedirs(directory, exist_ok=True)
-    filepath = os.path.join(directory, filename)
+def extracted_to_text(data, year):
+    output_dir_year = config.TMP_PATH / "text" / str(year)
+    os.makedirs(output_dir_year, exist_ok=True)
+    filename = f"text_{year}.parquet"
+    filepath = os.path.join(output_dir_year, filename)
 
     data.to_parquet(filepath, engine="pyarrow",
                     compression="snappy", index=True)
@@ -858,11 +859,11 @@ def clean_full_text(pdf, extract_ref):
 
 
 def batch_full_Clean(extracted_dir: str,
-                     paperdata,
+                     paperdata: pd.DataFrame,
                      year: int,
-                     extract_ref: bool,
-                     n_jobs: int,
-                     push_to_vectorDB: bool):
+                     extract_ref: Optional[bool] = pdf_config['extract_ref'],
+                     n_jobs: Optional[int] = pdf_config['n_jobs_extract'],
+                     push_to_vectorDB: Optional[bool] = False):
     ids_to_save = []
     while True:
         new_ids = collect_extracted_ids(extracted_dir)
@@ -889,18 +890,11 @@ def batch_full_Clean(extracted_dir: str,
             paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
                 paperdata["text"].set_index("paperId")).reset_index(drop=False))
 
-            paperdata["text"] = paperdata["text"].fillna(
-                'None')
             paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
 
-        if len(ids_to_save) > 128:
-            output_dir_year = os.path.join(
-                config.TEXTDATA_PATH, str(year))
-            _save_data(paperdata["text"],
-                       directory=output_dir_year,
-                       filename=f"text_{year}.parquet")
+        if len(ids_to_save) > 64:
+            extracted_to_text(paperdata["text"], year)
 
-            # CHECK IF THE FOLLOWING WORKS
             if push_to_vectorDB:
                 DBmask = paperdata['text']["paperId"].isin(
                     ids_to_save)
@@ -911,13 +905,8 @@ def batch_full_Clean(extracted_dir: str,
             ids_to_save = []
 
     if len(ids_to_save) > 0:
-        output_dir_year = os.path.join(
-            config.TEXTDATA_PATH, str(year))
-        _save_data(paperdata["text"],
-                   directory=output_dir_year,
-                   filename=f"text_{year}.parquet")
+        extracted_to_text(paperdata["text"], year)
 
-        # CHECK IF THE FOLLOWING WORKS
         if push_to_vectorDB:
             DBmask = paperdata['text']["paperId"].isin(
                 ids_to_save)
@@ -931,9 +920,8 @@ def batch_full_Clean(extracted_dir: str,
 
 
 def extract_PDFs(
-        years: Optional[int] = None,
-        filters: Optional[List[Any] |
-                          List[List[Any]]] = None,
+        paperdata: pd.DataFrame,
+        year: int,
         n_jobs: Optional[int] = pdf_config['n_jobs_extract'],
         timeout_per_article: Optional[float] = pdf_config['timeout_per_article'],
         max_pages: Optional[Union[int, List[int]]] = [
@@ -950,9 +938,6 @@ def extract_PDFs(
     if extract_done is None:
         extract_done = DummyEvent()
 
-    years = [datetime.now().year] if years is None else years
-    years = [years] if not isinstance(years, list) else years
-
     if pdfs_dir is not None:
         downloads_dir_base = pdfs_dir
     else:
@@ -966,55 +951,42 @@ def extract_PDFs(
 
     n_jobs = min(n_jobs, 2 * multiprocessing.cpu_count() // 3)
 
-    for year in years:
-        downloads_dir = downloads_dir_base / str(year)
-        extracted_dir = downloads_dir / "extracted"
-        os.makedirs(extracted_dir, exist_ok=True)
+    downloads_dir = downloads_dir_base / str(year)
+    extracted_dir = downloads_dir / "extracted"
+    os.makedirs(extracted_dir, exist_ok=True)
 
-        logger.info(f"Extracting pdfs for year {year}")
-        paperdata = load_data(subsets=year,
-                              data_types=["metadata", "text"])
-        if filters is not None:
-            paperdata_filt = load_data(subsets=year,
-                                       data_types=[
-                                           "text", "metadata"],
-                                       filters=filters)
-        else:
-            paperdata_filt = paperdata
+    logger.info(f"Extracting pdfs for year {year}")
+    paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
+                         paperdata["metadata"][[
+                             "paperId", "authorName"]],
+                         on="paperId",
+                         how="inner")
 
-        paperInfo = pd.merge(paperdata_filt["text"][["paperId", "openAccessPdf"]],
-                             paperdata_filt["metadata"][[
-                                 "paperId", "authorName"]],
-                             on="paperId",
-                             how="inner")
+    extract_process = multiprocessing.Process(
+        target=batch_full_extract,
+        kwargs={'paperInfo': paperInfo,
+                'downloads_dir': downloads_dir,
+                'n_jobs': n_jobs,
+                'timeout_per_article': timeout_per_article,
+                'max_pages': max_pages,
+                'keep_pdfs': max_pages})
 
-        extract_process = multiprocessing.Process(
-            target=batch_full_extract,
-            kwargs={'paperInfo': paperInfo,
-                    'downloads_dir': downloads_dir,
-                    'n_jobs': n_jobs,
-                    'timeout_per_article': timeout_per_article,
-                    'max_pages': max_pages,
-                    'keep_pdfs': max_pages})
+    clean_process = multiprocessing.Process(
+        target=batch_full_Clean,
+        kwargs={'extracted_dir': extracted_dir,
+                'paperdata': paperdata,
+                'year': year,
+                'extract_ref': extract_ref,
+                'n_jobs': n_jobs,
+                'push_to_vectorDB': push_to_vectorDB})
 
-        clean_process = multiprocessing.Process(
-            target=batch_full_Clean,
-            kwargs={'extracted_dir': extracted_dir,
-                    'paperdata': paperdata,
-                    'year': year,
-                    'extract_ref': extract_ref,
-                    'n_jobs': n_jobs,
-                    'push_to_vectorDB': push_to_vectorDB})
+    extract_process.start()
+    clean_process.start()
 
-        extract_process.start()
-        clean_process.start()
+    clean_process.join()
+    extract_process.join()
 
-        clean_process.join()
-        extract_process.join()
-
-        if not keep_pdfs:
-            shutil.rmtree(downloads_dir)
+    if not keep_pdfs:
+        shutil.rmtree(downloads_dir)
 
     extract_done.set()
-
-    return paperdata["text"]

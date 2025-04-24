@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shutil
 import time
 import asyncio
 import pandas as pd
@@ -11,9 +12,9 @@ from typing import Optional, Union, List, Tuple, Any
 from pdf.extract_PDF import extract_PDFs
 from pdf.download_PDF import download_PDFs
 
-from vectorDB.push_qdrant import QdrantManager
+from vectorDB.qdrant import QdrantManager
 from vectorDB.embed import PaperEmbed
-from dataIO.load import load_data
+from dataIO.load import load_data, update_text
 from pdf.extract_PDF import collect_extracted_batch
 
 import config
@@ -29,40 +30,52 @@ pdf_config = params["pdf"]
 
 def download_and_extract(**kwargs):
 
-    done_event = Event()
+    for year in kwargs['years']:
+        paperdata = load_data(subsets=year,
+                              data_types=["metadata", "text"])
+        paperdata_filt = paperdata
+        if kwargs['filters'] is not None:
+            paperdata_filt = load_data(subsets=year,
+                                       data_types=[
+                                           "text", "metadata"],
+                                       filters=kwargs['filters'])
+        download_proc = Process(
+            target=download_PDFs,
+            kwargs={'paperdata': paperdata_filt,
+                    'year': year,
+                    'n_jobs': kwargs['n_jobs'][0],
+                    'timeout_loadpage': kwargs['timeout_loadpage'],
+                    'timeout_startdw': kwargs['timeout_startdw'],
+                    'save_pdfs_to': kwargs['save_pdfs_to']})
 
-    download_proc = Process(
-        target=download_PDFs,
-        kwargs={'years': kwargs['years'],
-                'filters': kwargs['filters'],
-                'n_jobs': kwargs['n_jobs'][0],
-                'timeout_loadpage': kwargs['timeout_loadpage'],
-                'timeout_startdw': kwargs['timeout_startdw'],
-                'save_pdfs_to': kwargs['save_pdfs_to'],
-                'done_event': done_event})
+        extract_proc = Process(
+            target=extract_PDFs,
+            kwargs={'paperdata': paperdata_filt,
+                    'year': year,
+                    'n_jobs': kwargs['n_jobs'][1],
+                    'timeout_per_article': kwargs['timeout_per_article'],
+                    'max_pages': kwargs['max_pages'],
+                    'pdfs_dir': kwargs['save_pdfs_to'],
+                    'keep_pdfs': kwargs['keep_pdfs'],
+                    'push_to_vectorDB': kwargs.get('push_to_vectorDB', False),
+                    'extract_done': kwargs.get('extract_done', None)})
 
-    extract_proc = Process(
-        target=extract_PDFs,
-        kwargs={'years': kwargs['years'],
-                'filters': kwargs['filters'],
-                'n_jobs': kwargs['n_jobs'][1],
-                'timeout_per_article': kwargs['timeout_per_article'],
-                'max_pages': kwargs['max_pages'],
-                'pdfs_dir': kwargs['save_pdfs_to'],
-                'keep_pdfs': kwargs['keep_pdfs'],
-                'push_to_vectorDB': kwargs.get('push_to_vectorDB', False),
-                'extract_done': kwargs.get('extract_done', None)})
+        extract_proc.start()
+        download_proc.start()
 
-    extract_proc.start()
-    download_proc.start()
+        download_proc.join()
+        extract_proc.join()
 
-    download_proc.join()
-    extract_proc.join()
+        tmp_dir_year = config.TMP_PATH / "text" / str(year)
+        extracted_path = os.path.join(tmp_dir_year, f"text_{year}.parquet")
+        final_textdata = pd.read_parquet(extracted_path, engine="pyarrow")
+        update_text(final_textdata, year)
+        shutil.rmtree(tmp_dir_year)
 
 
 def run_embedding(
         done_event,
-        years: Optional[int] = None,
+        years: Optional[Union[int, List[int]]] = None,
         filters: Optional[Union[List[Tuple], List[List[Tuple]]]] = None,
         extract_done: Optional[bool] = None):
 
@@ -89,26 +102,33 @@ def run_embedding(
                 break
 
             if extracted_batches:
-                paper_dir = extracted_dir / extracted_batches[0]
-                paperdata = {'metadata': pd.DataFrame(),
-                             'text': pd.DataFrame()}
+                paperdata = {'metadata': [],
+                             'text': []}
+                for batch_dir in extracted_batches:
+                    paper_dir = extracted_dir / batch_dir
 
-                fp_metadata = paper_dir / "metadata.extracted"
-                paperdata['metadata'] = pd.read_parquet(
-                    fp_metadata, engine="pyarrow")
-                os.remove(fp_metadata)
+                    fp_metadata = paper_dir / "metadata.extracted"
+                    paperdata['metadata'].append(
+                        pd.read_parquet(fp_metadata, engine="pyarrow"))
+                    os.remove(fp_metadata)
 
-                fp_text = paper_dir / "text.extracted"
-                paperdata['text'] = pd.read_parquet(fp_text, engine="pyarrow")
-                os.remove(fp_text)
+                    fp_text = paper_dir / "text.extracted"
+                    paperdata['text'].append(
+                        pd.read_parquet(fp_text, engine="pyarrow"))
+                    os.remove(fp_text)
 
-                os.rmdir(paper_dir)
+                    os.rmdir(paper_dir)
+
+                paperdata['metadata'] = pd.concat(
+                    paperdata['metadata'], axis=0).reset_index(drop=True)
+                paperdata['text'] = pd.concat(
+                    paperdata['text'], axis=0).reset_index(drop=True)
 
                 logger.info(
                     f"Will now embed {len(paperdata['metadata'])} articles that just got extracted")
                 producer.batch_embeddings(paperdata)
 
-                extracted_batches = collect_extracted_batch(extracted_dir)
+                # extracted_batches = collect_extracted_batch(extracted_dir)
             else:
                 time.sleep(5)
 
@@ -119,23 +139,51 @@ def run_embedding(
     done_event.set()
 
 
-def run_qdrant(done_event):
+def sync_qdrant(done_event):
     manager = QdrantManager()
 
-    async def run_and_watch():
+    async def watch_and_sync():
         await manager.sync_qdrant(done_event)
 
-    asyncio.run(run_and_watch())
+    asyncio.run(watch_and_sync())
+
+
+def update_qdrant_payloads(years: Union[int, List[int]] = None):
+    years = [years] if not isinstance(years, list) else years
+
+    manager = QdrantManager()
+
+    async def batch_update_payloads():
+        for year in years:
+            logger.info(f"Updating payloads for year {year}")
+            paperdata = load_data(subsets=year,
+                                  data_types=["text", "metadata"],
+                                  filters=[('pdf_status', '==', 'extracted')]
+                                  )
+            metadata = paperdata['metadata'].to_dict(orient="records")
+            await manager.batch_update_payloads(metadata)
+
+    asyncio.run(batch_update_payloads())
+
+
+def update_payloads(years: Union[int, List[int]] = None):
+    years = [datetime.now().year] if years is None else years
+    years = [years] if not isinstance(years, list) else years
+
+    payload_proc = Process(target=update_qdrant_payloads, args=(years,))
+
+    payload_proc.start()
+    payload_proc.join()
 
 
 def embed_and_push(extract_done: Optional[bool] = None,
-                   years: Optional[int] = None,
+                   years: Optional[Union[int, List[int]]] = None,
                    filters: Optional[Union[List[Tuple],
                                            List[List[Tuple]]]] = None):
 
     embed_done = Event()
 
-    sync_proc = Process(target=run_qdrant, args=(embed_done,))
+    sync_proc = Process(target=sync_qdrant, args=(embed_done,))
     embed_proc = Process(target=run_embedding,
                          args=(embed_done, years, filters, extract_done))
 
@@ -147,7 +195,7 @@ def embed_and_push(extract_done: Optional[bool] = None,
 
 
 def extract_embed_and_push(
-        years: Optional[int] = None,
+        years: Optional[Union[int, List[int]]] = None,
         filters: Optional[List[Any] | List[List[Any]]] = None,
         n_jobs: Optional[List[int]] = [
             pdf_config['n_jobs_download'], pdf_config['n_jobs_extract'],
@@ -192,7 +240,7 @@ def extract_embed_and_push(
 def process(
         download_extract: bool = True,
         embed_push: bool = True,
-        years: Optional[int] = None,
+        years: Optional[Union[int, List[int]]] = None,
         filters: Optional[List[Any] | List[List[Any]]] = None,
         n_jobs: Optional[List[int]] = [
             pdf_config['n_jobs_download'], pdf_config['n_jobs_extract'],

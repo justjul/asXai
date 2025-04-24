@@ -1,4 +1,4 @@
-from .push_qdrant import QdrantManager
+from .qdrant import QdrantManager
 from .embed import PaperEmbed
 
 __all__ = [

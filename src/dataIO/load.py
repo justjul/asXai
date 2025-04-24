@@ -3,6 +3,7 @@ import config
 import os
 from typing import List, Tuple, Union, TypedDict
 from datetime import datetime
+import time
 import pandas as pd
 
 import logging
@@ -55,6 +56,13 @@ class DataSetManager:
 
             file_name = f"{dtype}_{subset}.parquet"
             file_path = path / subset / file_name
+
+            while True:
+                update_inprogress = path / subset / "inprogress.pkl"
+                if os.path.exists(update_inprogress):
+                    time.sleep(5)
+                else:
+                    break
 
             # Define filters
             _filters = self.filters if i == 0 else [
@@ -157,3 +165,15 @@ def load_data(
                                          compression="snappy", index=False)
 
     return output
+
+
+def update_text(newtxtdata, subset):
+    txtdata = load_data(subset, data_types=['text'])
+
+    txtdata = (newtxtdata.set_index("paperId").combine_first(
+        txtdata["text"].set_index("paperId")).reset_index(drop=False))
+
+    filename = f"text_{str(subset)}.parquet"
+    filepath = config.TEXTDATA_PATH / str(subset) / filename
+    txtdata.to_parquet(filepath, engine="pyarrow",
+                       compression="snappy", index=True)

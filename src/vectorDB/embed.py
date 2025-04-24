@@ -7,22 +7,18 @@ import config
 from pathlib import Path
 import json
 import pandas as pd
+import re
 
 from src.utils import load_params
 from src.utils import get_tqdm
 from src.logger import get_logger
 
-import nltk
-
-try:
-    nltk.data.find("tokenizers/punkt_tab")
-except LookupError:
-    nltk.download("punkt_tab")
-
 logger = get_logger(__name__, level=logging.INFO)
 
 params = load_params()
 embed_config = params["embedding"]
+
+sentence_splitter = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
 
 
 def chunk_text(
@@ -33,86 +29,92 @@ def chunk_text(
         prefix_len: int = 0
 ) -> dict:
 
-    sentences = sent_tokenize(text=text)
-    sentences_norm = []
-    for sent in sentences:
-        tokenized = tokenizer.encode(
-            sent.strip(), add_special_tokens=False)
-        if len(tokenized) > chunk_size - prefix_len:
-            split_size = chunk_size - prefix_len - 5  # -5 to be on the safe side
-            subsents = [tokenizer.decode(tokenized[k:k+split_size])
-                        for k in range(0, len(tokenized), split_size)]
-            sentences_norm.extend(subsents)
+    sentences = [s.strip() for s in sentence_splitter.split(text) if s.strip()]
+
+    tokenized = tokenizer(sentences, add_special_tokens=False)
+    all_token_ids = tokenized["input_ids"]
+
+    # Flatten and split long token sequences
+    sentence_tokens = []
+    max_len = chunk_size - prefix_len - 5
+    for token_ids in all_token_ids:
+        if len(token_ids) > max_len:
+            sentence_tokens.extend(
+                [token_ids[i:i+max_len]
+                    for i in range(0, len(token_ids), max_len)]
+            )
         else:
-            sentences_norm.append(sent)
+            sentence_tokens.append(token_ids)
 
-    for sent in sentences_norm:
-        tokenized = tokenizer.encode(
-            sent.strip(), add_special_tokens=False)
-        if len(tokenized) > chunk_size - prefix_len + 5:
-            print(sent)
-            raise Exception(
-                "There's still a text chunk larger than chunk_size")
-
-    chunks = []
+    chunks_token_ids = []
     chunks_len = []
     current_chunk = []
     current_len = 0
-    for sent in sentences_norm:
-        sent_clean = sent.strip()
-        n_word_sent = len(sent_clean.split(' '))
-        if n_word_sent > 2:
-            tokenized = tokenizer.encode(
-                sent_clean, add_special_tokens=False)
-            if current_len + len(tokenized) < chunk_size - prefix_len:
-                current_chunk.append(sent_clean)
-                current_len += len(tokenized)
-            else:
-                if current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                    chunks_len.append(current_len)
-                current_chunk = [sent_clean]
-                current_len = len(tokenized)
-        if len(chunks) > max_chunks + 2:
+
+    for token_ids in sentence_tokens:
+        if len(token_ids) < 3:
+            continue
+        if current_len + len(token_ids) < chunk_size - prefix_len:
+            current_chunk.extend(token_ids)
+            current_len += len(token_ids)
+        else:
+            if current_chunk:
+                chunks_token_ids.append(current_chunk)
+                chunks_len.append(current_len)
+            current_chunk = token_ids.copy()
+            current_len = len(token_ids)
+        if len(chunks_token_ids) > max_chunks + 2:
             break
 
-    if (len(chunks) < max_chunks+2 and current_chunk and current_len > 0
-            and current_len < chunk_size - prefix_len):
-        chunks.append(' '.join(current_chunk))
+    if len(chunks_token_ids) < max_chunks+2 and current_chunk and current_len > 0:
+        chunks_token_ids.append(current_chunk)
         chunks_len.append(current_len)
 
-    overlapping_chunks = []
+    overlapping_token_chunks = []
     window_masks = []
-    for i in range(len(chunks)):
-        if len(overlapping_chunks) > max_chunks:
+
+    for i in range(len(chunks_token_ids)):
+        if len(overlapping_token_chunks) > max_chunks:
             break
 
-        mask = torch.zeros(tokenizer.model_max_length,
-                           dtype=torch.float32)
-        if i > 0 and i < len(chunks)-1:
-            overlapping_chunks.append(' '.join(chunks[i-1:i+2]))
-            start_idx = chunks_len[i-1]+prefix_len
-            end_idx = start_idx + chunks_len[i]
-            mask[start_idx:end_idx] = 1.0
+        mask = torch.zeros(tokenizer.model_max_length, dtype=torch.float32)
+
+        prev_chunk = chunks_token_ids[i-1] if i > 0 else []
+        curr_chunk = chunks_token_ids[i]
+        next_chunk = chunks_token_ids[i+1] if i + \
+            1 < len(chunks_token_ids) else []
+        next_next_chunk = chunks_token_ids[i +
+                                           2] if i+2 < len(chunks_token_ids) else []
+        prev_prev_chunk = chunks_token_ids[i-2] if i-2 >= 0 else []
+
+        # Choose context window
+        if i > 0 and i < len(chunks_token_ids)-1:
+            concat = prev_chunk + curr_chunk + next_chunk
+            start_idx = len(prev_chunk) + prefix_len
         elif i == 0:
-            overlapping_chunks.append(' '.join(chunks[i:i+3]))
+            concat = curr_chunk + next_chunk + next_next_chunk
             start_idx = prefix_len
-            end_idx = start_idx + chunks_len[i]
-            mask[start_idx:end_idx] = 1.0
-        else:
-            overlapping_chunks.append(' '.join(chunks[i-2:i+1]))
-            start_idx = chunks_len[i-2]+chunks_len[i-1]+prefix_len
-            end_idx = start_idx + chunks_len[i]
-            mask[start_idx:end_idx] = 1.0
+        else:  # i is last index or second last
+            concat = prev_prev_chunk + prev_chunk + curr_chunk
+            start_idx = len(prev_prev_chunk) + len(prev_chunk) + prefix_len
+
+        end_idx = start_idx + len(curr_chunk)
+        if end_idx > tokenizer.model_max_length:
+            end_idx = tokenizer.model_max_length  # Prevent overflow
+        mask[start_idx:end_idx] = 1.0
+
         if mask.sum() == 0:
-            print(i, len(chunks), start_idx, end_idx)
-            print(chunks[i-1:i+2])
-            raise Exception("Mask's empty!")
+            print("Empty mask!", i, start_idx, end_idx)
+            raise Exception("Empty mask!")
+
+        overlapping_token_chunks.append(concat)
         window_masks.append(mask.unsqueeze(0))
 
+    overlapping_chunks = tokenizer.batch_decode(overlapping_token_chunks,
+                                                skip_special_tokens=True)
+
     return {"chunks": overlapping_chunks,
-            "masks": window_masks,
-            "core_chunks": chunks}
+            "masks": window_masks}
 
 
 def load_and_chunk(paperData: dict,
@@ -130,16 +132,6 @@ def load_and_chunk(paperData: dict,
     paperInfo = paperData.copy()
     payloads = [{**paperInfo, "text": chunk, "is_ref": False}
                 for chunk in masked_chunks["chunks"]]
-
-    # ref_chunks = chunk_text(paperData["ref_text"], tokenizer,
-    #                         chunk_size=chunk_size,
-    #                         max_chunks=max_chunks,
-    #                         prefix_len=prefix_len)
-    # texts.extend(ref_chunks["chunks"])
-    # masks.extend(ref_chunks["masks"])
-    # paperInfo = paperData.copy()
-    # payloads.extend([{**paperInfo, "text": chunk, "is_ref": True}
-    #                  for chunk in ref_chunks["chunks"]])
 
     return paper_id, texts, masks, payloads
 
@@ -247,33 +239,31 @@ class PaperEmbed:
         if masks is not None:
             masks = torch.cat(masks, dim=0)
         texts = [prefix + txt + suffix for txt in texts]
-        tqdm = get_tqdm()
-        with tqdm(range(0, len(texts), self.chunk_batch_size),
-                  desc="Computing embeddings", colour='#b3ffb3') as pbar:
-            for i in pbar:
-                batch = texts[i:i+self.chunk_batch_size]
-                inputs = self.tokenizer(
-                    batch, return_tensors="pt", padding=True, truncation=True).to(self.device)
 
-                if masks is not None:
-                    mask = masks[i:i +
-                                 self.chunk_batch_size].to(self.device).unsqueeze(-1)
-                else:
-                    mask = inputs["attention_mask"].unsqueeze(-1)
+        for i in range(0, len(texts), self.chunk_batch_size):
+            batch = texts[i:i+self.chunk_batch_size]
+            inputs = self.tokenizer(
+                batch, return_tensors="pt", padding=True, truncation=True).to(self.device)
 
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
-                    S = outputs.last_hidden_state.size()[1]
-                    masked_embeds = outputs.last_hidden_state * mask[:, :S, :]
-                    embeds = masked_embeds.sum(1) / mask.sum(1)
-                    embeddings.append(embeds.cpu())
-                del embeds, masked_embeds, mask, outputs, inputs
-                torch.cuda.empty_cache()
-
-            if embeddings:
-                embeddings = torch.cat(embeddings, dim=0)
+            if masks is not None:
+                mask = masks[i:i +
+                             self.chunk_batch_size].to(self.device).unsqueeze(-1)
             else:
-                embeddings = None
+                mask = inputs["attention_mask"].unsqueeze(-1)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                S = outputs.last_hidden_state.size()[1]
+                masked_embeds = outputs.last_hidden_state * mask[:, :S, :]
+                embeds = masked_embeds.sum(1) / mask.sum(1)
+                embeddings.append(embeds.cpu())
+            del embeds, masked_embeds, mask, outputs, inputs
+            torch.cuda.empty_cache()
+
+        if embeddings:
+            embeddings = torch.cat(embeddings, dim=0)
+        else:
+            embeddings = None
 
         return embeddings
 
@@ -285,72 +275,76 @@ class PaperEmbed:
         chunk_executor = ThreadPoolExecutor(max_workers=self.n_jobs)
 
         tqdm = get_tqdm()
-        with tqdm(range(0, len(papers), self.paper_batch_size),
-                  desc="Paper batches", position=0, colour='#000000') as pbar:
-            for i in pbar:
-                paperBatch = papers[i:i+self.paper_batch_size]
-                doc_prefix = self._model_prefix(tokenized=True)
-                tasks = [chunk_executor.submit(
-                    load_and_chunk, paper, self.chunk_tokenizer,
-                    self.chunk_size, self.max_chunks, len(doc_prefix)) for paper in paperBatch]
+        # with tqdm(range(0, len(papers), self.paper_batch_size),
+        #           desc=f"Embedding {len(papers)} papers", position=0, colour='#000000') as pbar:
+        # for i in pbar:
+        paperBatch = papers  # [i:i+self.paper_batch_size]
+        doc_prefix = self._model_prefix(tokenized=True)
+        tasks = [chunk_executor.submit(
+            load_and_chunk, paper, self.chunk_tokenizer,
+            self.chunk_size, self.max_chunks, len(doc_prefix)) for paper in paperBatch]
 
-                batched_texts = []
-                batched_ids = []
-                batched_masks = []
-                batched_payloads = []
-                all_paper_ids = []
-                chunk_counts = []
-                n_papers = len(tasks)
-                for k, future in enumerate(as_completed(tasks), 1):
-                    try:
-                        paper_id, texts, masks, payloads = future.result()
-                        if len(texts) > 1:
-                            batched_ids.extend([paper_id]*len(texts))
-                            batched_texts.extend(texts)
-                            batched_masks.extend(masks)
-                            batched_payloads.extend(payloads)
-                            all_paper_ids.append(paper_id)
-                            chunk_counts.append(len(texts))
-                    except Exception as e:
-                        print("Failed to chunk")
-                        raise e
+        batched_texts = []
+        batched_ids = []
+        batched_masks = []
+        batched_payloads = []
+        all_paper_ids = []
+        chunk_counts = []
+        n_papers = len(tasks)
+        with tqdm(enumerate(as_completed(tasks), 1), total=len(papers),
+                  desc=f"Embedding {len(papers)} papers", position=0, colour='#000000') as pbar:
+            for k, future in pbar:
+                try:
+                    paper_id, texts, masks, payloads = future.result()
+                    if len(texts) > 1:
+                        batched_ids.extend([paper_id]*len(texts))
+                        batched_texts.extend(texts)
+                        batched_masks.extend(masks)
+                        batched_payloads.extend(payloads)
+                        all_paper_ids.append(paper_id)
+                        chunk_counts.append(len(texts))
+                except Exception as e:
+                    print("Failed to chunk")
+                    raise e
 
-                    if (len(all_paper_ids) == self.chunk_batch_size
-                            or k == n_papers):
-                        sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
-                                                  batched_ids), key=lambda x: len(x[0]))
-                        if sorted_batch:
-                            batched_texts, batched_masks, batched_payloads, batched_ids = list(
-                                zip(*sorted_batch))
+                pbar.set_postfix(
+                    {'embedding': f"{n_papers - k + 1} papers left"})
+                if (len(all_paper_ids) >= self.chunk_batch_size // self.max_chunks
+                        or k == n_papers):
+                    sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
+                                              batched_ids), key=lambda x: len(x[0]))
+                    if sorted_batch:
+                        batched_texts, batched_masks, batched_payloads, batched_ids = list(
+                            zip(*sorted_batch))
 
-                            doc_prefix = self._model_prefix(tokenized=False)
-                            embeddings = self.compute_embeddings(texts=batched_texts,
-                                                                 masks=batched_masks,
-                                                                 prefix=doc_prefix)
+                        doc_prefix = self._model_prefix(tokenized=False)
+                        embeddings = self.compute_embeddings(texts=batched_texts,
+                                                             masks=batched_masks,
+                                                             prefix=doc_prefix)
 
-                        for paper_id in all_paper_ids:
-                            ref_embedding = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
-                                                        if id == paper_id])
-                            ref_embedding = ref_embedding.mean(dim=0).tolist()
-                            embeded_data = {
-                                "embeddings": [
-                                    emb.tolist() for id, emb in zip(batched_ids, embeddings)
-                                    if id == paper_id],
-                                "payloads": [
-                                    payload for id, payload in zip(batched_ids, batched_payloads)
-                                    if id == paper_id],
-                                "ref_embedding": ref_embedding}
-                            if embeded_data["embeddings"]:
-                                save_executor.submit(
-                                    save_embeddings, paper_id, embeded_data, self.cache_dir)
-                                # save_embeddings(paper_id, embeded_data, self.cache_dir)
+                    for paper_id in all_paper_ids:
+                        ref_embedding = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
+                                                    if id == paper_id])
+                        ref_embedding = ref_embedding.mean(dim=0).tolist()
+                        embeded_data = {
+                            "embeddings": [
+                                emb.tolist() for id, emb in zip(batched_ids, embeddings)
+                                if id == paper_id],
+                            "payloads": [
+                                payload for id, payload in zip(batched_ids, batched_payloads)
+                                if id == paper_id],
+                            "ref_embedding": ref_embedding}
+                        if embeded_data["embeddings"]:
+                            save_executor.submit(
+                                save_embeddings, paper_id, embeded_data, self.cache_dir)
+                            # save_embeddings(paper_id, embeded_data, self.cache_dir)
 
-                        batched_texts = []
-                        batched_ids = []
-                        batched_masks = []
-                        batched_payloads = []
-                        all_paper_ids = []
-                        chunk_counts = []
+                    batched_texts = []
+                    batched_ids = []
+                    batched_masks = []
+                    batched_payloads = []
+                    all_paper_ids = []
+                    chunk_counts = []
 
         chunk_executor.shutdown(wait=True)
         save_executor.shutdown(wait=True)
