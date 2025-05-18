@@ -13,6 +13,26 @@ qdrant:
   port: 6333
   host: localhost
 
+reranking:
+  nhead: 4
+  num_layers: 2
+  dropout: 0.1
+  max_len: 128
+  temperature: 0.01
+  cite_deltaMonths: 0
+  topK_near_cite_range: [0, 50]
+  years_cite_range: [2024, 2025]
+  training_epochs: 10
+  test_size: 0.2
+  learning_rate: 0.0001
+
+
+search:
+  hash_len: 20
+  topk_qdrant: 100
+  topk_rerank: 40
+
+
 download:
   min_citations_per_year: 1
   fields_of_study:

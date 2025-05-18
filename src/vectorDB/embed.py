@@ -1,3 +1,5 @@
+import torch.nn.functional as F
+import torch.nn as nn
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from nltk.tokenize import sent_tokenize
@@ -193,6 +195,7 @@ class PaperEmbed:
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
 
         self.model, self.tokenizer, self.chunk_tokenizer = self.load_model()
 
@@ -323,9 +326,9 @@ class PaperEmbed:
                                                              prefix=doc_prefix)
 
                     for paper_id in all_paper_ids:
-                        ref_embedding = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
-                                                    if id == paper_id])
-                        ref_embedding = ref_embedding.mean(dim=0).tolist()
+                        all_embeddings = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
+                                                      if id == paper_id])
+                        mean_embedding = all_embeddings.mean(dim=0).tolist()
                         embeded_data = {
                             "embeddings": [
                                 emb.tolist() for id, emb in zip(batched_ids, embeddings)
@@ -333,7 +336,7 @@ class PaperEmbed:
                             "payloads": [
                                 payload for id, payload in zip(batched_ids, batched_payloads)
                                 if id == paper_id],
-                            "ref_embedding": ref_embedding}
+                            "mean_embedding": mean_embedding}
                         if embeded_data["embeddings"]:
                             save_executor.submit(
                                 save_embeddings, paper_id, embeded_data, self.cache_dir)

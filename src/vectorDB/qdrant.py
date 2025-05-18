@@ -1,14 +1,12 @@
 import os
 import config
-import docker
-import docker.errors
 import asyncio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, Datatype, VectorParams, PointStruct
 from qdrant_client.models import HnswConfigDiff, OptimizersConfigDiff
 from qdrant_client.models import TokenizerType, TextIndexParams
 from qdrant_client.models import Filter, FieldCondition
-from qdrant_client.models import MatchValue, MatchAny
+from qdrant_client import models
 from qdrant_client.models import WithLookup
 import requests
 
@@ -21,6 +19,7 @@ import math
 from tqdm import tqdm
 from transformers import AutoConfig
 from src.utils import load_params
+from src.utils import running_inside_docker
 
 import logging
 from src.logger import get_logger
@@ -61,9 +60,12 @@ class QdrantManager:
 
         hidden_size = AutoConfig.from_pretrained(self.model_name).hidden_size
         self.vector_size = hidden_size
+        self.default_vector = {self.collection_name_chunks: "default",
+                               self.collection_name_ids: "default"}
 
         self.port = qdrant_config["port"]
-        self.host = qdrant_config["host"]
+        self.host = "qdrant" if running_inside_docker(
+        ) else qdrant_config["host"]
 
         self.docker_timeout = docker_timeout
         self.watch_tmp_timeout = watch_tmp_timeout
@@ -77,21 +79,23 @@ class QdrantManager:
         self.semaphore = asyncio.Semaphore(self.max_threads)
 
     def is_qdrant_running(self):
-        logger.info(f"Waiting for Qdrant container '{self.container_name}'...")
         ready = False
         endtime = time.time() + self.docker_timeout
         url = f"http://{self.host}:{self.port}/collections"
+        n_retry = 0
 
         while time.time() < endtime:
             try:
                 response = requests.get(url, timeout=2.0)
                 if response.status_code == 200:
-                    logger.info("Qdrant service is up and running.")
+                    if n_retry > 0:
+                        logger.info("Qdrant service is up and running.")
                     ready = True
                     break
             except requests.exceptions.RequestException:
                 pass
             logger.debug("Qdrant not ready yet. Retrying in 3 seconds...")
+            n_retry += 1
             time.sleep(3)
 
         if not ready:
@@ -183,7 +187,7 @@ class QdrantManager:
             self.client.delete(
                 collection_name=self.collection_name_chunks,
                 points_selector=Filter(must=[FieldCondition(key="paperId",
-                                                                match=MatchAny(any=paperIds))])
+                                                                match=models.MatchAny(any=paperIds))])
             )
             # for id in paperIds
         ]
@@ -191,7 +195,7 @@ class QdrantManager:
             self.client.delete(
                 collection_name=self.collection_name_ids,
                 points_selector=Filter(must=[FieldCondition(key="paperId",
-                                                                match=MatchAny(any=paperIds))])
+                                                                match=models.MatchAny(any=paperIds))])
             )
             # for id in paperIds
         ])
@@ -204,11 +208,11 @@ class QdrantManager:
             data = json.load(f)
         embeddings = data['embeddings']
         payloads = data['payloads']
-        ref_embedding = data['ref_embedding']
+        mean_embedding = data['mean_embedding']
         paperId_Qrant = str(uuid.uuid5(
             namespace=uuid.NAMESPACE_DNS, name=f"{paperId}"))
         id_points = [PointStruct(id=paperId_Qrant,
-                                 vector=ref_embedding,
+                                 vector=embeddings,  # mean_embedding
                                  payload={'paperIdQ': paperId_Qrant,
                                           **{field: payloads[0][field] for field in self.id_fields}})]
 
@@ -239,11 +243,14 @@ class QdrantManager:
 
     async def check_collection(self):
         if not await self.client.collection_exists(self.collection_name_ids):
+            vec_config = VectorParams(size=self.vector_size,
+                                      distance=Distance.COSINE,
+                                      datatype=Datatype.FLOAT16,
+                                      multivector_config=models.MultiVectorConfig(
+                                          comparator=models.MultiVectorComparator.MAX_SIM))
             await self.client.create_collection(
                 collection_name=self.collection_name_ids,
-                vectors_config=VectorParams(size=self.vector_size,
-                                            distance=Distance.COSINE,
-                                            datatype=Datatype.FLOAT16),
+                vectors_config=vec_config,
                 optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
                 hnsw_config=HnswConfigDiff(on_disk=True,
                                            m=16,
@@ -254,11 +261,12 @@ class QdrantManager:
                                                field_schema="keyword")
 
         if not await self.client.collection_exists(self.collection_name_chunks):
+            vec_config = VectorParams(size=self.vector_size,
+                                      distance=Distance.COSINE,
+                                      datatype=Datatype.FLOAT16)
             await self.client.create_collection(
                 collection_name=self.collection_name_chunks,
-                vectors_config=VectorParams(size=self.vector_size,
-                                            distance=Distance.COSINE,
-                                            datatype=Datatype.FLOAT16),
+                vectors_config=vec_config,
                 optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
                 hnsw_config=HnswConfigDiff(on_disk=True,
                                            m=16,
@@ -315,7 +323,7 @@ class QdrantManager:
         match_filter = Filter(must=[
             FieldCondition(
                 key="paperId",
-                match=MatchValue(value=paper_id)
+                match=models.MatchValue(value=paper_id)
             )
         ])
 
@@ -358,41 +366,77 @@ class QdrantManager:
             self.client = AsyncQdrantClient(host=self.host, port=self.port)
 
         if collection_name is None:
-            collection_name = self.collection_name_chunks
+            collection_name = self.collection_name_ids
 
         must_conditions = []
 
         if filter_by_paper_ids:
             must_conditions.append(FieldCondition(
-                key="paperId", match=MatchAny(any=filter_by_paper_ids)))
+                key="paperId", match=models.MatchAny(any=filter_by_paper_ids)))
 
         if filter_payloads:
-            for key, values in filter_payloads.items():
+            matchany_fields = ['paperIdQ', 'paperId', 'venue', 'fieldsOfStudy',
+                               'openAccessPdf', 'abstract', 'title', 'authorName', 'main_text']
+            matchtext_fields = ['abstract', 'main_text']
+            matchrange_fields = ['publicationYear',
+                                 'citationCount', 'influentialCitationCount']
+            matchdate_fields = ['publicationDate']
+            for filt in filter_payloads:
+                match, range = None, None
+                if filt[0] in matchany_fields:
+                    values = filt[2] if isinstance(
+                        filt[2], list) else [filt[2]]
+                    if filt[1] in {'==', 'eq'}:
+                        match = models.MatchAny(any=values)
+                    elif filt[1] == '!=':
+                        match = models.MatchExcept(**{"except": values})
+                elif filt[0] in matchtext_fields:
+                    match = models.MatchText(text=filt[2])
+                elif filt[0] in matchrange_fields:
+                    cond = {filt[1]: filt[2]}
+                    range = models.Range(**cond)
+                elif filt[0] in matchdate_fields:
+                    cond = {filt[1]: filt[2]}
+                    range = models.DatetimeRange(**cond)
+
                 must_conditions.append(FieldCondition(
-                    key=key, match=MatchAny(any=values)))
+                    key=filt[0], match=match, range=range))
 
         query_filter = Filter(
             must=must_conditions) if must_conditions else None
 
-        results = await self.client.query_points_groups(
-            collection_name=collection_name,
-            query=query_vector,
-            query_filter=query_filter,
-            group_by="paperIdQ",
-            limit=topK,  # Max amount of groups
-            group_size=topK_per_paper,  # Max amount of points per group
-            with_lookup=WithLookup(
-                collection=self.collection_name_ids,
-                with_payload=True),
-            with_payload=True,
-            **kwargs)
+        if collection_name == self.collection_name_ids:
+            results = await self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=query_filter,
+                limit=topK,  # Max amount of results
+                with_payload=True,
+                **kwargs)
+        elif collection_name == self.collection_name_chunks:
+            results = await self.client.query_points_groups(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=query_filter,
+                group_by="paperIdQ",
+                limit=topK,  # Max amount of groups
+                group_size=topK_per_paper,  # Max amount of points per group
+                with_lookup=WithLookup(
+                    collection=self.collection_name_ids,
+                    with_payload=True),
+                with_payload=True,
+                **kwargs)
 
         return results
 
     async def query_batch_streamed(self,
                                    query_vectors: List[List[float]],
+                                   query_ids: List[int] = None,
                                    topK: int = 5,
                                    topK_per_paper: int = 5, **kwargs):
+        if not query_ids:
+            query_ids = [k for k in range(len(query_vectors))]
+
         tasks = [
             self.query(query_vector=vec,
                        topK=topK,
@@ -400,11 +444,9 @@ class QdrantManager:
                        **kwargs)
             for vec in query_vectors
         ]
-        results = []
-        for task in asyncio.as_completed(tasks):
-            result = await task
-            results.append(result)
-        return results
+        results = await asyncio.gather(*tasks)
+        final_results = {qid: res for qid, res in zip(query_ids, results)}
+        return final_results
 
     async def query_stream_generator(self,
                                      query_vectors: List[List[float]],

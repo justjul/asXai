@@ -45,19 +45,21 @@ class PaperInfo(TypedDict):
 class PDFextractor:
     def __init__(
             self,
-            directory: str,
+            download_dir: str,
             keepPDF: Optional[bool] = False,
             timeout: Optional[int] = 60,
             max_pages: Optional[Union[int, List[int]]] = None,
             n_word_th: Optional[int] = 50):
 
-        self.directory = directory
+        self.download_dir = download_dir
         self.keepPDF = keepPDF
         self.timeout = timeout
         self.max_pages = max_pages
         self.n_word_th = n_word_th
-        self.extracted_dir = os.path.join(self.directory, "extracted")
+        year_dir = Path(self.download_dir).stem
+        self.extracted_dir = config.TMP_PATH / "extracted" / year_dir
         os.makedirs(self.extracted_dir, exist_ok=True)
+        os.chmod(self.extracted_dir, 0o777)
 
     def extractPDFs(self, papers: List[PaperInfo]):
         # dir_path_orig = [os.path.join(downloads_dir, pdf_data['paperId']) for pdf_data in textdata]
@@ -68,7 +70,7 @@ class PDFextractor:
             #     dir_list = os.listdir(downloads_dir) if dir_list is None else dir_list
             # dir_list.sort(key=lambda name: os.path.getmtime(os.path.join(downloads_dir, name)))
             for dirname in dir_list:
-                dir_path = os.path.join(self.directory, dirname["id"])
+                dir_path = os.path.join(self.download_dir, dirname["id"])
                 if os.path.isdir(dir_path):
                     if not dirname["time"]:
                         dirname["time"] = os.path.getmtime(dir_path)
@@ -452,8 +454,9 @@ def extract_PDFs_workers(papers):
 
 
 def extracted_to_text(data, year):
-    output_dir_year = config.TMP_PATH / "text" / str(year)
+    output_dir_year = config.TMP_PATH / "text_to_save" / str(year)
     os.makedirs(output_dir_year, exist_ok=True)
+    os.chmod(output_dir_year, 0o777)
     filename = f"text_{year}.parquet"
     filepath = os.path.join(output_dir_year, filename)
 
@@ -465,8 +468,9 @@ def extracted_to_DB(textdata, metadata):
     assert textdata['paperId'].equals(metadata['paperId'])
     id0 = textdata['paperId'].iloc[0]
     output_dir_DB = Path(os.path.join(
-        config.TMP_PATH, "extracted", id0))
+        config.TMP_PATH, "text_to_embed", id0))
     os.makedirs(output_dir_DB, exist_ok=False)
+    os.chmod(output_dir_DB, 0o777)
 
     fp_text = output_dir_DB / "text.extracted"
     textdata.to_parquet(fp_text.with_suffix(".inprogress"), engine="pyarrow",
@@ -941,7 +945,7 @@ def extract_PDFs(
     if pdfs_dir is not None:
         downloads_dir_base = pdfs_dir
     else:
-        downloads_dir_base = config.TMP_PATH / "download"
+        downloads_dir_base = config.TMP_PATH / "downloads"
 
     if not isinstance(max_pages, list):
         max_pages = [max_pages, 0]
@@ -952,8 +956,9 @@ def extract_PDFs(
     n_jobs = min(n_jobs, 2 * multiprocessing.cpu_count() // 3)
 
     downloads_dir = downloads_dir_base / str(year)
-    extracted_dir = downloads_dir / "extracted"
+    extracted_dir = config.TMP_PATH / "extracted" / str(year)
     os.makedirs(extracted_dir, exist_ok=True)
+    os.chmod(extracted_dir, 0o777)
 
     logger.info(f"Extracting pdfs for year {year}")
     paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
@@ -969,7 +974,7 @@ def extract_PDFs(
                 'n_jobs': n_jobs,
                 'timeout_per_article': timeout_per_article,
                 'max_pages': max_pages,
-                'keep_pdfs': max_pages})
+                'keep_pdfs': keep_pdfs})
 
     clean_process = multiprocessing.Process(
         target=batch_full_Clean,
@@ -987,6 +992,9 @@ def extract_PDFs(
     extract_process.join()
 
     if not keep_pdfs:
-        shutil.rmtree(downloads_dir)
+        try:
+            shutil.rmtree(downloads_dir)
+        except:
+            logger.warning(f"Could not delete downloads folder for {year}")
 
     extract_done.set()

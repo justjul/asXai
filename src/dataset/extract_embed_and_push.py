@@ -66,7 +66,7 @@ def download_and_extract(**kwargs):
         download_proc.join()
         extract_proc.join()
 
-        tmp_dir_year = config.TMP_PATH / "text" / str(year)
+        tmp_dir_year = config.TMP_PATH / "text_to_save" / str(year)
         extracted_path = os.path.join(tmp_dir_year, f"text_{year}.parquet")
         final_textdata = pd.read_parquet(extracted_path, engine="pyarrow")
         update_text(final_textdata, year)
@@ -93,8 +93,9 @@ def run_embedding(
             producer.batch_embeddings(paperdata)
     else:
         extracted_dir = Path(os.path.join(
-            config.TMP_PATH, "extracted"))
+            config.TMP_PATH, "text_to_embed"))
         os.makedirs(extracted_dir, exist_ok=True)
+        os.chmod(extracted_dir, 0o777)
         while True:
             extracted_batches = collect_extracted_batch(extracted_dir)
 

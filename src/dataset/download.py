@@ -402,7 +402,8 @@ def load_arX_dataset(arXiv_downloads_dir):
             and time.time() - os.path.getmtime(arXiv_df_path) < 3600*24*7):
         arX_data = pd.read_parquet(arXiv_df_path)
     else:
-        logger.info(f"updating arXiv database from Kaggle...")
+        logger.info(
+            f"updating arXiv database from Kaggle to {arXiv_downloads_dir}...")
         subprocess.run(["kaggle", "datasets", "download", "Cornell-University/arxiv", "--path",
                         str(arXiv_downloads_dir), "--unzip"], check=True)
 

@@ -7,6 +7,7 @@ import pandas as pd
 import math
 import datetime
 import os
+import pathlib
 import glob
 import shutil
 import tempfile
@@ -16,13 +17,14 @@ from typing import Optional, TypedDict
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.remote.remote_connection import RemoteConnection
 import subprocess
 
 import atexit
 
 import logging
 from src.logger import get_logger
-from src.utils import get_tqdm
+from src.utils import get_tqdm, running_inside_docker
 import psutil
 
 logger = get_logger(__name__, level=logging.INFO)
@@ -44,15 +46,23 @@ class PDFdownloader:
                  worker_id: Optional[int] = 0,
                  timeout_loadpage: Optional[float] = 15,
                  timeout_startdw: Optional[float] = 5):
-        self.downloads_dir = downloads_dir
         self.source = source
         self.queue = []
         self.headless = headless
         self.worker_id = worker_id
 
+        hostname = "selenium-hub" if running_inside_docker() else "localhost"
+
+        self.downloads_dir = downloads_dir
+        year_dir = pathlib.Path(downloads_dir).stem
+        self.chrome_downloads_dir = "/home/seluser/Downloads/" + year_dir
+
+        self.selenium_hub_url = os.getenv(
+            "SELENIUM_HUB_URL", f"http://{hostname}:4444/wd/hub")
+
         temp_dir = tempfile.gettempdir()
-        self.user_data_dir = tempfile.mkdtemp(
-            prefix=f"chrome-profile-{self.worker_id}-", dir=temp_dir)
+        # self.user_data_dir = tempfile.mkdtemp(
+        #     prefix=f"chrome-profile-{self.worker_id}-", dir=temp_dir)
         if self.source == "http":
             self.driver = self._s2_init_driver(headless)
         else:
@@ -75,32 +85,44 @@ class PDFdownloader:
             "error 500"}
 
     def _s2_init_driver(self, headless: bool = False):
-        chromedriver_path = shutil.which("chromedriver")
-        if not chromedriver_path:
-            raise FileNotFoundError(
-                "chromedriver not found in your PATH. Please install it or add it to PATH.")
-        service = Service(executable_path=chromedriver_path)
+        # chromedriver_path = shutil.which("chromedriver")
+        # if not chromedriver_path:
+        #     raise FileNotFoundError(
+        #         "chromedriver not found in your PATH. Please install it or add it to PATH.")
+        # service = Service(executable_path=chromedriver_path)
 
         options = webdriver.ChromeOptions()
-        options.add_argument(f"--user-data-dir={str(self.user_data_dir)}")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
+        # options.binary_location = "/usr/bin/chromium-browser"
+        # options.add_argument(f"--user-data-dir={str(self.user_data_dir)}")
+        # options.add_argument("--disable-gpu")
+        # options.add_argument("--no-sandbox")
+        # options.add_argument("--disable-dev-shm-usage")
         if headless:
             options.add_argument("--headless=new")
+        # prefs = {
+        #     "plugins.always_open_pdf_externally": True,
+        #     "download.prompt_for_download": False,
+        #     "download.default_directory": str(self.chrome_downloads_dir),
+        #     "download.directory_upgrade": True}
+
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
         prefs = {
             "plugins.always_open_pdf_externally": True,
             "download.prompt_for_download": False,
-            "download.default_directory": str(self.downloads_dir),
-            "download.directory_upgrade": True}
+            "download.default_directory": str(self.chrome_downloads_dir)}
         options.add_experimental_option("prefs", prefs)
-        chromedriver_path = shutil.which("chromedriver")
+        # chromedriver_path = shutil.which("chromedriver")
 
         waitforSession = 0
         max_retries = 3
         retry_delay = 3
         while waitforSession < max_retries:
             try:
-                driver = webdriver.Chrome(service=service, options=options)
+                # driver = webdriver.Chrome(service=service, options=options)
+                driver = webdriver.Remote(command_executor=self.selenium_hub_url,
+                                          options=options)
+                RemoteConnection.set_timeout(10)
                 break
             except Exception as e:
                 logger.warning(
@@ -124,8 +146,12 @@ class PDFdownloader:
 
     def close(self):
         if self.driver is not None:
-            self.driver.quit()
-            shutil.rmtree(self.user_data_dir, ignore_errors=True)
+            try:
+                time.sleep(1)
+                self.driver.quit()
+                # shutil.rmtree(self.user_data_dir, ignore_errors=True)
+            finally:
+                self.driver = None
 
     def reset_queue(self):
         self.queue = []
@@ -141,24 +167,39 @@ class PDFdownloader:
     def _http_download(self, paperInfo: PaperInfo):
         try:
             extensions = ("*.pdf", "*.crdownload")
-            paper_download_dir = os.path.join(
+            paper_dir = os.path.join(
                 self.downloads_dir, paperInfo["paperId"])
-            os.makedirs(paper_download_dir, exist_ok=True)
+            os.makedirs(paper_dir, mode=777, exist_ok=True)
+            os.chmod(paper_dir, 0o777)
+
+            chrome_paper_dir = os.path.join(
+                self.chrome_downloads_dir, paperInfo["paperId"])
 
             self.queue.append(paperInfo["paperId"])
 
             # Set Chrome's download directory dynamically
             self.driver.execute_cdp_cmd(
                 "Page.setDownloadBehavior",
-                {"behavior": "allow", "downloadPath": paper_download_dir})
+                {"behavior": "allow", "downloadPath": chrome_paper_dir})
 
             clean_url = re.sub(r"^http://", "https://",
                                paperInfo["openAccessPdf"])
             filename = None
             self.driver.set_page_load_timeout(self.timeout_loadpage)
-            self.driver.get(clean_url)
-            end_time_startdw = time.time() + self.timeout_startdw
 
+            # script = f"""
+            #         const link = document.createElement('a');
+            #         link.href = '{clean_url}';
+            #         document.body.appendChild(link);
+            #         link.click();
+            #         document.body.removeChild(link);
+            #         """
+
+            # self.driver.execute_script(script)
+
+            self.driver.get(clean_url)
+
+            end_time_startdw = time.time() + self.timeout_startdw
             download_status = "download too long"
 
             if (any(marker.lower() in self.driver.page_source.lower()
@@ -173,7 +214,7 @@ class PDFdownloader:
                     filename = [
                         fname
                         for ext in extensions
-                        for fname in glob.glob(os.path.join(paper_download_dir, ext))
+                        for fname in glob.glob(os.path.join(paper_dir, ext))
                     ]
                     if filename:
                         download_status = "downloading"
@@ -205,7 +246,8 @@ class PDFdownloader:
         extensions = ("*.pdf")
         paper_download_dir = os.path.join(
             self.downloads_dir, paperInfo["paperId"])
-        os.makedirs(paper_download_dir, exist_ok=True)
+        os.makedirs(paper_download_dir, mode=777, exist_ok=True)
+        os.chmod(paper_download_dir, 0o777)
 
         self.queue.append(paperInfo["paperId"])
 
@@ -291,11 +333,15 @@ def download_worker_close():
 
 def download_PDF_workers(papers):
     global downloader
-    output = [downloader.download(paper) for paper in papers]
-    while not downloader.is_download_finished():
-        time.sleep(1)
-    downloader.reset_queue()
-    return output
+    try:
+        output = [downloader.download(paper) for paper in papers]
+        while not downloader.is_download_finished():
+            time.sleep(1)
+        downloader.reset_queue()
+        return output
+    finally:
+        downloader.reset_queue()
+        downloader.close()
 
 
 def downloaded_year_done(directory: str):
@@ -327,12 +373,13 @@ def download_PDFs(
     if save_pdfs_to is not None:
         downloads_dir_base = save_pdfs_to
     else:
-        downloads_dir_base = config.TMP_PATH / "download"
+        downloads_dir_base = config.TMP_PATH / "downloads"
 
     n_jobs = min(n_jobs, 20)
     results = []
     downloads_dir = downloads_dir_base / str(year)
-    os.makedirs(downloads_dir, exist_ok=True)
+    os.makedirs(downloads_dir, mode=777, exist_ok=True)
+    os.chmod(downloads_dir, 0o777)
 
     logger.info(f"Downloading pdfs for year {year}")
     paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
@@ -353,14 +400,14 @@ def download_PDFs(
 
         if not paperInfo_s.empty:
             minibatch_size = 20  # 100
-            batch_size = 512
+            batch_size = minibatch_size * n_jobs  # 512
             Npapers = len(paperInfo_s)
             tqdm = get_tqdm()
             with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
                       desc=f"Downloading {Npapers} papers from {year}") as pbar:
                 try:
                     for i in pbar:
-                        close_all_chrome_sessions()
+                        # close_all_chrome_sessions()
                         print(downloads_dir)
                         endtime = time.time() + timeout_loadpage * batch_size
 
@@ -420,7 +467,9 @@ def download_PDFs(
                                     if len(pdf_new) > 0:
                                         endtime = time.time() + 3*timeout_loadpage
 
-                            close_all_chrome_sessions()
+                            # close_all_chrome_sessions()
+                            download_pool.close()
+                            download_pool.join()
 
                 except Exception as e:
                     pbar.close()

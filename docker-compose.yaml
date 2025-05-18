@@ -9,8 +9,87 @@ services:
       - .env.compose
     volumes:
       - ${QDRANT_VOL_HOST}:/qdrant/storage
+    networks:
+      - asxai-net
 
-  dataset-service:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - asxai-net
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - asxai-net
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    command: >
+      mlflow server 
+      --host 0.0.0.0 
+      --port 5000
+    volumes:
+      - ${MODEL_ROOT_HOST}/mlflow_storage/mlruns:/mlruns
+      - ${MODEL_ROOT_HOST}/mlflow_storage/mlartifacts:/mlartifacts
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    networks:
+      - asxai-net
+
+  selenium-hub:
+    image: selenium/hub:4.31.0
+    container_name: selenium-hub
+    profiles: ["on-demand"]
+    ports:
+      - "4444:4444"
+    environment:
+      - GRID_MAX_SESSION=${SELENIUM_MAX_SESSION}
+      - GRID_BROWSER_TIMEOUT=60
+      - GRID_TIMEOUT=60
+    networks:
+      - asxai-net
+
+  chrome:
+    image: selenium/node-chrome:95.0-20250414
+    depends_on:
+      - selenium-hub
+    profiles: ["on-demand"]
+    shm_size: 2gb
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      - SE_EVENT_BUS_PUBLISH_PORT=4442
+      - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
+      - SE_VNC_NO_PASSWORD=1
+    volumes:
+      - ${TEMP_ROOT_HOST}/downloads:/home/seluser/Downloads
+    networks:
+      - asxai-net
+    deploy:
+      replicas: ${NB_CHROME_NODES} 
+
+  database-service:
     build:
       context: .
       dockerfile: src/services/database/Dockerfile
@@ -22,10 +101,27 @@ services:
     volumes:
       - ${CODE_ROOT_HOST}:${CODE_ROOT}
       - ${PROJECT_ROOT_HOST}:${PROJECT_ROOT}
-      - ${TEMP_ROOT_HOST}:${TEMP_FOLDER_ROOT}/tmp
+      - ${TEMP_ROOT_HOST}:${TEMP_ROOT}
       - ${KAGGLE_VOL_HOST}:/root/.kaggle:ro
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      - ${MODEL_ROOT_HOST}/mlflow_storage:${MODEL_ROOT}/mlflow_storage
     depends_on:
       - qdrant
+      - chrome
+      - mlflow
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - asxai-net
+
+networks:
+  asxai-net:
+    driver: bridge
 
 
 # to start qdrant:
@@ -34,4 +130,4 @@ services:
 # to start update service:
 # docker-compose --profile on-demand --env-file .env.compose up
 # or
-# docker-compose run -rm dataset-service update --years 2024 2025
+# docker-compose run -rm database-service update --years 2024 2025
