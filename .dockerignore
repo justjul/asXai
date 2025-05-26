@@ -1,0 +1,29 @@
+# Don't copy notebooks or large files used only in dev
+notebooks/
+*.ipynb
+
+# Python junk files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# build artifacts
+*.egg-info/
+build/
+dist/
+
+# IDE settings
+.vscode/
+
+# Git metadata
+.git/
+.gitignore
+
+# Secrets / local config
+.env
+.env.*
+
+# System files
+.DS_Store
+*.log

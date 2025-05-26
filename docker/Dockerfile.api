@@ -1,0 +1,28 @@
+# Dockerfile
+# build with: docker build -f docker/Dockerfile.api -t asxai-api .
+FROM ubuntu:latest
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# --- System setup ---
+RUN apt-get update && apt-get install -y \
+    python3.12 python3.12-dev python3.12-venv \
+    curl wget unzip build-essential \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# --- Set working directory ---
+WORKDIR /app/asXai/code
+
+# Copy minimal install files first (layer caching)
+COPY pyproject.toml README.md ./
+
+# Copy source code
+COPY src/ ./src/
+
+# Install only what the API needs
+RUN pip install -e .[api]

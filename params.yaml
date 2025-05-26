@@ -25,12 +25,50 @@ reranking:
   training_epochs: 10
   test_size: 0.2
   learning_rate: 0.0001
-
+  
+ollama:
+  model_name: 'gemma3:12b' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
+  port: 11434
+  host: localhost
+  docker_timeout: 30.0
+  watch_tmp_timeout: 60.0
+  max_threads: 5
+  expand_instruct: >
+            You are a helpful assistant that expand queries sent by users to retrieve relevant scientific articles.\n
+            Expand the following search query by rephrasing it in a more descriptive and complete sentence, 
+            suitable for retrieving relevant scientific documents. Correct any spelling mistake when necessary.
+            Do not return anything else than just the expanded query.\n\n
+            Here is the original query:\n
+  parse_instruct: > 
+            You are a helpful assistant that parse queries and only return the requested fields.\n
+            Parse the following search query to extract the cleaned query and any metadata it contains.
+            Specifically, identify and separate:\n
+            - author last names\n
+            - Date to start searching from (formatted as %Y-%m-%d even if there's just a year mentioned)\n
+            - Date to stop searching at (formatted as %Y-%m-%d even if there's just a year mentioned)\n
+            Then reformulate the query without sections specifying authors names or dates.\n
+            Return results as a dictionary with cleaned query and fields:\n
+            {\"cleaned_query\" \"author_names\", \"start_date\", \"end_date\"}\n\n
+            If you can't find answers for any of these fields just fill it with 'null'.\n
+            Here is the original query:\n
 
 search:
   hash_len: 20
-  topk_qdrant: 100
+  topk_articles: 100
   topk_rerank: 40
+  topk_per_article: 1
+  timeout: 5.0
+  use_query_cache: false
+
+chat:
+  hash_len: 20
+  synth_instruct: >
+            You are a helpful academic assistant.\n
+            Answer the following question using the articles provided as context.\n
+            If you can't find the answer, do not pretend you know it, but answer "I don't know".\n
+            Question: <QUERY> \n
+            Context:\n
+            <REFS>
 
 
 download:

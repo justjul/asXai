@@ -2,9 +2,69 @@
 name = "asxai"
 version = "0.1.0"
 description = "a RAG pipeline to keep track of scientific articles"
-authors = [{ name = "", email = "@" }]
-dependencies = []
+authors = [{ name = "Julien Fournier", email = "justjules.fournier@gmail.com" }]
+readme = "README.md"
+dependencies = [
+    "numpy",
+    "pandas",
+    "joblib",
+
+    "qdrant-client",
+    "confluent-kafka",
+    "ollama",
+
+    "pyarrow",
+    "python-dotenv",
+    "pyyaml",
+    "python-dateutil",
+
+    "mlflow",
+    "python-json-logger",
+
+    "requests",
+    "tqdm",
+    "fire"
+]
+
+[project.optional-dependencies]
+pdf = [
+    "pdfminer.six",
+    "selenium",
+    "psutil"
+    ]
+nlp = [
+    "torch",
+    "torchvision",
+    "torchaudio",
+    "transformers",
+    "sentence-transformers",
+    "xformers",
+    "scikit-learn"
+    ]
+api = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "sseclient-py",
+    ]
+dev = [
+    "ipython",
+    "ipywidgets",
+    "jupyter",
+    "jupyterlab-widgets",
+    "ipykernel",
+    "black",
+    "pytest",
+    "mypy",
+    "flake8",
+    "matplotlib",
+    "seaborn"
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["asxai"]
+package-dir = { "" = "src" }
