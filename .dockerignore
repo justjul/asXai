@@ -27,3 +27,8 @@ dist/
 # System files
 .DS_Store
 *.log
+
+#frontend
+**/node_modules
+**/dist
+src/frontend

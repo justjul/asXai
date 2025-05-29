@@ -128,10 +128,11 @@ def run_search_worker():
 
 
 async def batch_and_save(raw_payloads):
+    print(raw_payloads)
     queries = [pl["query"] for pl in raw_payloads]
-    query_ids = [pl["id"] for pl in raw_payloads]
-    query_hashes = {qid: hash_query(queries[i])
-                    for i, qid in enumerate(query_ids)}
+    task_ids = [pl["task_id"] for pl in raw_payloads]
+    query_ids = {pl["task_id"]: pl["query_id"]
+                 for pl in raw_payloads}
 
     USE_CACHE = search_config['use_query_cache']
 
@@ -139,13 +140,13 @@ async def batch_and_save(raw_payloads):
     parsed_queries = {}
     saved_query_embeds = {}
     queries_to_expand, qids_to_expand = [], []
-    for i, qid in enumerate(query_ids):
+    for i, qid in enumerate(task_ids):
         mark_as_inprogress(qid)
         existing_results[qid] = load_existing_result(qid)
 
         if (USE_CACHE
             and existing_results[qid]
-                and existing_results[qid].get("query_id") == query_hashes[qid]):
+                and existing_results[qid].get("query_id") == query_ids[qid]):
             parsed_query = existing_results[qid].get("parsed_query", {})
             if parsed_query:
                 parsed_queries[qid] = parsed_query
@@ -160,8 +161,15 @@ async def batch_and_save(raw_payloads):
                                                                  query_ids=qids_to_expand,
                                                                  options={'temperature': 0.5})
     parsed_queries.update(new_parsed_queries)
-    new_expanded_queries = [new_parsed_queries[qid].get('query', queries_to_expand[i])
-                            for i, qid in enumerate(qids_to_expand)]
+
+    try:
+        new_expanded_queries = [new_parsed_queries[qid].get('query', queries_to_expand[i])
+                                for i, qid in enumerate(qids_to_expand)]
+    except Exception as e:
+        print(new_parsed_queries.keys())
+        print(qids_to_expand)
+        raise
+
     if new_expanded_queries:
         new_embeds = embedEngine.embed_queries(new_expanded_queries)
     else:
@@ -170,11 +178,11 @@ async def batch_and_save(raw_payloads):
     new_query_embeds = {qid: emb for qid,
                         emb in zip(qids_to_expand, new_embeds)}
     query_embeds = [new_query_embeds[qid] if qid in new_query_embeds else saved_query_embeds[qid]
-                    for qid in query_ids]
+                    for qid in task_ids]
     query_embeds = torch.stack(query_embeds)
 
     meta_filters = []
-    for qid in query_ids:
+    for qid in task_ids:
         meta_filters.append([])
         if parsed_queries[qid]['authorName']:
             meta_filters[-1].append(['authorName',
@@ -188,7 +196,7 @@ async def batch_and_save(raw_payloads):
 
     results = await qdrant.query_batch_streamed(
         query_vectors=query_embeds.tolist(),
-        query_ids=query_ids,
+        query_ids=task_ids,
         topK=search_config["topk_articles"],
         topK_per_paper=search_config["topk_per_article"],
         payload_filters=meta_filters,
@@ -196,10 +204,10 @@ async def batch_and_save(raw_payloads):
         with_vectors=True,
     )
 
-    empty_ids = [qid for qid in query_ids
+    empty_ids = [qid for qid in task_ids
                  if not results.get(qid) or not results[qid].points]
-    query_ids = [qid for qid in query_ids
-                 if qid not in empty_ids]
+    task_ids = [qid for qid in task_ids
+                if qid not in empty_ids]
 
     if empty_ids:
         for qid in empty_ids:
@@ -207,43 +215,43 @@ async def batch_and_save(raw_payloads):
         logger.warning(
             f"Skipping reranking for {len(empty_ids)} queries with no Qdrant results: {empty_ids}")
 
-    if not query_ids:
+    if not task_ids:
         logger.warning(
-            "No valid query_ids remaining after filtering empty Qdrant results. Exiting.")
+            "No valid task_ids remaining after filtering empty Qdrant results. Exiting.")
         return
 
-    queries = [queries[i] for i, qid in enumerate(query_ids)
+    queries = [queries[i] for i, qid in enumerate(task_ids)
                if qid not in empty_ids]
-    query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(query_ids)
+    query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(task_ids)
                                 if qid not in empty_ids])
-    raw_payloads = [raw_payloads[i] for i, qid in enumerate(query_ids)
+    raw_payloads = [raw_payloads[i] for i, qid in enumerate(task_ids)
                     if qid not in empty_ids]
 
     rerank_query_embeds = rerankEngine(
         query_embeds.unsqueeze(1).to(rerankEngine.device))
     res_embeds_offset = [
-        0] + [len(results[qid].points) for qid in query_ids]
+        0] + [len(results[qid].points) for qid in task_ids]
     res_embeds_offset = np.cumsum(res_embeds_offset)
     rerank_res_embeds = rerankEngine(
-        [torch.tensor(pt.vector) for qid in query_ids for pt in results[qid].points])
+        [torch.tensor(pt.vector) for qid in task_ids for pt in results[qid].points])
 
     rerank_scores = {}
-    for i, qid in enumerate(query_ids):
+    for i, qid in enumerate(task_ids):
         rerank_scores[qid] = rerankEngine.compute_max_sim(
             rerank_query_embeds[i], rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
 
-    for i, qid in enumerate(query_ids):
+    for i, qid in enumerate(task_ids):
         payload = [pt.payload | {'qdrant_score': pt.score,
                                  'rerank_score': rerank_scores[qid][i],
                                  'user_score': None,
                                  }
                    for i, pt in enumerate(results[qid].points)]
-        # for pl in payload:
-        #     pl['main_text'] = []
+        for pl in payload:
+            pl['main_text'] = []
 
         rerank_version_date = f"{rerankEngine.version}-{rerankEngine.training_date}"
 
-        if existing_results[qid] and existing_results[qid].get("query_id", []) == query_hashes[qid]:
+        if existing_results[qid] and existing_results[qid].get("query_id", []) == query_ids[qid]:
             existing_payload = existing_results[qid]['result']
             existing_ids = {item['paperId']
                             for item in existing_payload if 'paperId' in item}
@@ -266,7 +274,11 @@ async def batch_and_save(raw_payloads):
             new_payload = [
                 pl for pl in payload if pl['paperId'] not in existing_ids]
             new_payload = new_payload[:search_config["topk_rerank"]]
-            payload = existing_payload + new_payload
+        else:
+            existing_payload = []
+            new_payload = payload[:search_config["topk_rerank"]]
+
+        payload = existing_payload + new_payload
 
         blendscorer = BlendScorer.load(qid)
         trained = blendscorer.fit(payload)
@@ -286,28 +298,29 @@ async def batch_and_save(raw_payloads):
             "id": qid,
             "task_id": qid,
             "query": raw_payloads[i]["query"],
-            "query_id": query_hashes[qid],
+            "query_id": query_ids[qid],
             "user_id": raw_payloads[i].get("user_id"),
             "notebook_id": raw_payloads[i].get("notebook_id"),
             "qdrant_model": qdrant.model_name,
             "rerank_model": rerank_version_date,
             "blend_weights": blendscorer.weights,
+            "timestamp": time.time(),
             "parsed_query": {"query": parsed_queries[qid].get("query"),
                              "authorName": parsed_queries[qid].get("authorName"),
                              "publicationDate_start": parsed_queries[qid].get("publicationDate_start"),
                              "publicationDate_end": parsed_queries[qid].get("publicationDate_end")},
-            "query_embedding": query_embeds[i].tolist()
+            "query_embedding": []  # query_embeds[i].tolist()
         }
 
         result_json = [{**base_json, **pl} for pl in payload]
 
         # Save to disk
-        save_result(qid, result_json)
+        append_results(qid, result_json)
         mark_as_complete(qid)
         logger.info(f"Results for {qid} completed")
 
 
-def save_result(task_id: str, result_data: str):
+def append_results(task_id: str, result_data: list):
     users_root = config.USERS_ROOT
     full_path = os.path.join(users_root, f"{task_id}.inprogress")
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -324,7 +337,7 @@ def save_result(task_id: str, result_data: str):
         existing_data = []
 
     # Append new result
-    existing_data.append(result_data)
+    existing_data.extend(result_data)
 
     # Save updated list
     with open(full_path, "w") as f:
@@ -351,6 +364,10 @@ def mark_as_inprogress(task_id: str):
 
     if os.path.exists(json_path):
         os.replace(json_path, inprogress_path)
+    else:
+        os.makedirs(os.path.dirname(inprogress_path), exist_ok=True)
+        with open(inprogress_path, "w") as f:
+            json.dump([], f)
 
 
 def mark_as_complete(task_id: str):

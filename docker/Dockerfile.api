@@ -22,7 +22,7 @@ WORKDIR /app/asXai/code
 COPY pyproject.toml README.md ./
 
 # Copy source code
-COPY src/ ./src/
+COPY src/asxai  ./src/asxai
 
 # Install only what the API needs
 RUN pip install -e .[api]

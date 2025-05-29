@@ -68,6 +68,7 @@ def result_path(task_id: str, inprogress: bool = False) -> str:
 def get_result(task_id: str, timeout: float = search_config['timeout']) -> Optional[dict]:
     json_path = result_path(task_id)
     inprogress_path = result_path(task_id, inprogress=True)
+    time.sleep(0.5)
     start = time.time()
 
     # Wait for .json file
@@ -116,6 +117,7 @@ def list_notebooks(user_id: str) -> List[str]:
 class QueryRequest(BaseModel):
     user_id: str
     notebook_id: str
+    query_id: str
     query: str
 
 
@@ -123,11 +125,13 @@ class QueryRequest(BaseModel):
 async def create_search(req: QueryRequest):
     task_id = make_task_id(req.user_id, req.notebook_id)
     payload = {
-        "id": task_id,
+        "task_id": task_id,
         "query": req.query,
         "user_id": req.user_id,
+        "query_id": req.query_id,
         "notebook_id": req.notebook_id
     }
+    print(payload)
     producer.produce(SEARCH_REQ_TOPIC, key=task_id, value=json.dumps(payload))
     producer.flush()
     return {"task_id": task_id}

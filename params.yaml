@@ -54,10 +54,10 @@ ollama:
 
 search:
   hash_len: 20
-  topk_articles: 100
-  topk_rerank: 40
+  topk_articles: 50
+  topk_rerank: 10
   topk_per_article: 1
-  timeout: 5.0
+  timeout: 15.0
   use_query_cache: false
 
 chat:
@@ -69,6 +69,20 @@ chat:
             Question: <QUERY> \n
             Context:\n
             <REFS>
+  instruct_msg: >
+            \nImportant instructions:\n
+            * **If you can answer the user's question accurately based on your knowledge and previous messages in the conversation**:\n
+              answer it direclty and if you used previous messages, cite your source by including ARTICLE IDs and PDF URLs from the database \n
+              but DO NOT include external references. \
+            * **If your answer needs to be cross-checked for accuracy**:\n
+              expand the question by rephrasing it in a more descriptive and complete sentence, \n
+              suitable for retrieving relevant scientific documents. Make complete sentences not just key words. \n
+              At the end, return '*SEARCHING: *<query>' where ,<query> is the expanded query.
+  refine_msg: >
+            * Provide an accurate answer to the user's question based on the provided articles and on your knowledge.\n
+              Cite your sources by including ARTICLE IDs and PDF URLs where appropriate.\n
+            * If you didn't use any of the provided articles, finish with a cautious note saying: \n
+              **No information was found in the article database. This response is all based on my previous knowledge**
 
 
 download:

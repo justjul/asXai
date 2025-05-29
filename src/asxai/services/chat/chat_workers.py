@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 import os
 import hashlib
+import requests
 
 import config
 from asxai.vectorDB import OllamaManager
@@ -26,6 +27,8 @@ chat_config = params["chat"]
 
 message_queue = asyncio.Queue()
 async_runner = AsyncRunner()
+SEARCH_HOST = "search-api" if running_inside_docker() else 'localhost'
+SEARCH_PORT = 8000 if running_inside_docker() else 8100
 
 
 def hash_query(text: str) -> str:
@@ -69,65 +72,97 @@ async def ollama_chat(payload, ollama_manager):
     model_name = payload.get("model", ollama_manager.model_name)
     model_name = ollama_manager.resolve_model(model_name)
     context = load_chat_context(task_id=task_id)
-    # if not context:
-    # context = load_retrieved_context(task_id=task_id)
-    # save_chat_context(task_id, context)
 
-    #     user_message = context[-1]['content']
-    #     messages = context
-    # else:
-    messages = context + [{"role": "user", "content": user_message}]
+    instruct_msg = chat_config["instruct_msg"]
+
+    messages = context + \
+        [{"role": "user", "content": user_message + instruct_msg}]
 
     try:
         print(messages)
+        done = False
+        keep_streaming = False
+        search_context = []
+        papers = None
         full_response = ""
-        ollama_streamer = await ollama_manager.generate(
-            model=model_name,
-            messages=messages,
-            stream=True,
-            options={'temperature': 0.5}
-        )
-        logger.info(f"Query sent to Ollama for task_id={task_id}")
+        while not done:
+            ollama_streamer = await ollama_manager.generate(
+                model=model_name,
+                messages=messages,
+                stream=True,
+                options={'temperature': 0.5}
+            )
+            logger.info(f"Query sent to Ollama for task_id={task_id}")
 
-        buffer = ""
-        stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
-        with open(stream_path, "w") as stream_file:
-            stream_file.write(f"\n🧑[You]:\n\n {user_message}\n")
-            stream_file.write(f"\n🤖[asXai]\n\n")
-        with open(stream_path, "a") as stream_file:
-            stream_file.write("")
-            async for chunk in ollama_streamer:
-                token = chunk["message"]["content"]
-                buffer += token
-
-                if len(buffer) > 100:
-                    stream_file.write(buffer)
+            buffer = ""
+            stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
+            if not keep_streaming:
+                with open(stream_path, "w") as stream_file:
+                    # stream_file.write(f"\n🧑[You]:\n\n {user_message}\n")
+                    # stream_file.write(f"\n🤖[asXai]\n\n")
+                    stream_file.write(f"\n")
                     stream_file.flush()
-                    buffer = ""
-                full_response += token
+            with open(stream_path, "a") as stream_file:
+                stream_file.write("")
+                stream_file.flush()
+                async for chunk in ollama_streamer:
+                    token = chunk["message"]["content"]
+                    buffer += token
 
-            if len(buffer) > 0:
-                stream_file.write(buffer)
+                    if len(buffer) > 100:
+                        stream_file.write(buffer)
+                        stream_file.flush()
+                        buffer = ""
+                    full_response += token
 
-            if "ASK" in full_response or "QDRANT" in full_response:
-                search_qdrant = True
-                final_msg = "\n<SEARCHING_QDRANT>\n"
-            else:
-                search_qdrant = False
-                final_msg = "\n<END_OF_MESSAGE>\n"
-            stream_file.write(final_msg)
-            stream_file.flush()
+                if len(buffer) > 0:
+                    stream_file.write(buffer)
 
-        new_context = [
+                if not done and "SEARCHING" in full_response:
+                    done = False
+                    final_msg = "\n<SEARCHING>\n"
+                    response_parsed = full_response.split("SEARCHING:", 1)
+                    search_query = response_parsed[-1].strip()
+                    if len(response_parsed) > 1:
+                        full_response = response_parsed[0].strip()
+                    else:
+                        full_response = ""
+                else:
+                    done = True
+                    final_msg = "\n<END_OF_MESSAGE>\n"
+                stream_file.write(final_msg)
+                stream_file.flush()
+
+            keep_streaming = True
+
+            if done == False:
+                if search_query:
+                    submit_search(user_id=user_id,
+                                  notebook_id=notebook_id,
+                                  query_id=query_id,
+                                  query=search_query)
+                    search_context, papers = load_search_result(task_id=task_id,
+                                                                user_id=user_id,
+                                                                notebook_id=notebook_id,
+                                                                query_id=query_id)
+
+                refine_msg = chat_config["refine_msg"]
+                messages = context + search_context + \
+                    [{"role": "user", "content": user_message + refine_msg}]
+
+        new_context = search_context
+        new_context.extend([
             {"role": "user", "content": user_message,
                 "task_id": task_id, "timestamp": time.time(),
                 "user_id": user_id, "notebook_id": notebook_id,
-                "query_id": query_id, "model": model_name},
+                "query_id": query_id, "model": model_name,
+                "paperIds": None, "access":  "all"},
             {"role": "assistant", "content": full_response,
                 "task_id": task_id, "timestamp": time.time(),
                 "user_id": user_id, "notebook_id": notebook_id,
-                "query_id": query_id, "model": model_name}
-        ]
+                "query_id": query_id, "model": model_name,
+                "paperIds": papers, "access":  "all"}
+        ])
         save_chat_context(task_id, new_context)
 
         logger.info(f"Streaming complete for task_id={task_id}")
@@ -165,15 +200,6 @@ def run_chat_worker():
     async_runner.run(worker_loop(ollama_manager))
     logger.info("Chat worker ready")
 
-    # while True:
-    #     msg = consumer.poll(1.0)
-    #     if msg and not msg.error():
-    #         try:
-    #             payload = json.loads(msg.value())
-    #             full_response = async_runner.run(ollama_chat(payload))
-    #         except Exception as e:
-    #             logger.error(f"Malformed message or processing error: {e}")
-
 
 def save_chat_context(task_id: str, new_data: list, append=True):
     users_root = config.USERS_ROOT
@@ -201,6 +227,72 @@ def load_chat_context(task_id: str):
         except Exception as e:
             logger.warning(f"Failed to load chat context for {task_id}: {e}")
     return []
+
+
+def submit_search(user_id: str, notebook_id: str, query_id: str, query: str):
+    SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
+    payload = {
+        "user_id": user_id,
+        "notebook_id": notebook_id,
+        "query_id": query_id,
+        "query": query
+    }
+    res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
+
+
+def load_search_result(user_id: str, notebook_id: str, task_id: str, query_id: str):
+    SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
+    timeout = 15
+    endtime = time.time() + timeout
+    try:
+        while True:
+            try:
+                res = requests.get(f"{SEARCH_API_URL}/search/{task_id}").json()
+                res = res['notebook']
+                if (res and res[-1]['query_id'] == query_id):
+                    break
+            except Exception as e:
+                logger.warning(
+                    f"There was an issue trying to load search results: {e}")
+            if time.time() > endtime:
+                break
+
+        results = []
+        match_generator = (pl for pl in res if pl['query_id'] == query_id)
+        while len(results) < 5:
+            try:
+                results.append(next(match_generator))
+            except StopIteration:
+                break
+
+        model_name = 'search-worker'
+        search_context = []
+        papers = []
+        for paper in results:
+            papers.append(paper)
+            formatted_ref = ""
+            formatted_ref += f"---------\n"
+            formatted_ref += f"-  ARTICLE ID: {paper['paperId']}\n"
+            formatted_ref += f"-  PDF URL: {paper['openAccessPdf']}\n"
+            formatted_ref += f"-  TITLE: {paper['title']}\n"
+            formatted_ref += f"-  AUTHORS: {paper['authorName']}\n"
+            formatted_ref += f"-  PUBLICATION DATE: {paper['publicationDate']}\n"
+            # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
+            formatted_ref += f"-  EXCERPT: "
+            for chunk in paper['best_chunks'][:1]:
+                formatted_ref += f"'{chunk}'\n"
+            formatted_ref += f"\n"
+
+            search_context += [{"role": "user", "content": formatted_ref,
+                                "task_id": task_id, "timestamp": time.time(),
+                                "user_id": user_id, "notebook_id": notebook_id,
+                                "query_id": query_id, "model": model_name,
+                                "access":  "assistant"}
+                               ]
+    except Exception as e:
+        logger.error(f"Unable to load search result for {task_id}: {e}")
+
+    return search_context, papers
 
 
 def load_retrieved_context(task_id: str):

@@ -12,6 +12,7 @@ import uvicorn
 import hashlib
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from confluent_kafka import Producer, Consumer
 
 import config
@@ -70,7 +71,14 @@ producer = wait_for_kafka(KAFKA_BOOTSTRAP)
 create_topic_if_needed(KAFKA_BOOTSTRAP, "notebook-queries")
 
 # producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
-app = FastAPI(title="Search API")
+app = FastAPI(title="Chat API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Utilities
@@ -127,9 +135,10 @@ class ChatRequest(BaseModel):
 
 @app.post("/notebook/{task_id:path}/chat")
 async def submit_chat(task_id: str, req: ChatRequest):
+    query_id = hash_id(req.message + str(time.time()))
     payload = {
         "task_id": task_id,
-        "query_id": hash_id(req.message),
+        "query_id": query_id,
         "user_id": req.user_id,
         "notebook_id": req.notebook_id,
         "content": req.message,
@@ -141,10 +150,10 @@ async def submit_chat(task_id: str, req: ChatRequest):
     print(req.model)
     producer.produce(CHAT_REQ_TOPIC, key=task_id, value=json.dumps(payload))
     producer.flush()
-    return {"status": "submitted", "task_id": task_id}
+    return {"status": "submitted", "task_id": task_id, "query_id": query_id}
 
 
-@app.get("/notebook/{task_id:path}/stream")
+@app.get("/notebook/{task_id:path}/chat/stream")
 def stream_response(task_id: str):
     def event_stream():
         stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
@@ -166,6 +175,10 @@ def stream_response(task_id: str):
                         continue
 
                     line = line.strip()
+
+                    if line == "<SEARCHING>":
+                        continue
+
                     yield f"data: {line}\n\n"
 
                     if line == "<END_OF_MESSAGE>":
@@ -207,6 +220,11 @@ def get_final_chat(task_id: str):
                      if m["role"] == "assistant" and m.get("query_id") == query_id),
                     None
                 )
+                papers = next(
+                    (m["paperIds"] for m in reversed(history)
+                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+                    None
+                )
             if user_msg and assistant_msg:
                 break
             time.sleep(0.1)  # avoid busy waiting
@@ -217,7 +235,8 @@ def get_final_chat(task_id: str):
 
         return {
             "user": user_msg,
-            "assistant": assistant_msg
+            "assistant": assistant_msg,
+            "papers": papers
         }
 
     except Exception as e:
@@ -226,16 +245,69 @@ def get_final_chat(task_id: str):
             status_code=500, detail="Failed to read chat history.")
 
 
-@app.get("/notebook/{task_id:path}/history")
+@app.get("/notebook/{task_id:path}/content/{query_id}")
+def get_chat_msg(task_id: str, query_id: str):
+    chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
+    if not os.path.exists(chat_path):
+        raise HTTPException(status_code=404, detail="Chat history not found.")
+
+    try:
+        with open(chat_path) as f:
+            history = json.load(f)
+
+        endtime = time.time() + 10  # timeout after 10 seconds
+        user_msg, assistant_msg = None, None
+
+        while (user_msg is None or assistant_msg is None) and time.time() < endtime:
+            user_entry = next((m for m in reversed(history)
+                              if m["role"] == "user" and m.get("query_id") == query_id), None)
+            if user_entry:
+                user_msg = user_entry["content"]
+                query_id = user_entry.get("query_id")
+            if query_id:
+                assistant_msg = next(
+                    (m["content"] for m in reversed(history)
+                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+                    None
+                )
+                papers = next(
+                    (m["paperIds"] for m in reversed(history)
+                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+                    None
+                )
+            if user_msg and assistant_msg:
+                break
+            time.sleep(0.1)  # avoid busy waiting
+
+        if not user_msg or not assistant_msg:
+            raise HTTPException(
+                status_code=404, detail="Incomplete conversation.")
+
+        return {
+            "user": user_msg,
+            "assistant": assistant_msg,
+            "papers": papers
+        }
+
+    except Exception as e:
+        logger.error(f"Error reading chat history for {task_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to read chat history.")
+
+
+@app.get("/notebook/{task_id:path}/chat/history")
 def get_history(task_id: str):
+    print(task_id)
     chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
     if os.path.exists(chat_path):
         with open(chat_path) as f:
-            return json.load(f)
-    return {"task_id": task_id, "messages": []}
+            history = json.load(f)
+            history = [m for m in history if m.get("access") == 'all']
+            return history
+    return []
 
 
-@app.get("/notebook/{task_id:path}/result")
+@app.get("/notebook/{task_id:path}/chat/result")
 async def get_latest_result(task_id: str):
     result = get_result(task_id)
     if result is None:
@@ -250,5 +322,5 @@ def generate_task_id(user_id: str, notebook_id: str):
 
 
 if __name__ == "__main__":
-    uvicorn.run("asxai.services.chat.api:app",
+    uvicorn.run("asxai.services.chat.chat_api:app",
                 host="0.0.0.0", port=8000, reload=False)

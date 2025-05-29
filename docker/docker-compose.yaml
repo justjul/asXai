@@ -181,10 +181,58 @@ services:
       - kafka
       - search-worker
     ports:
-      - "8000:8000"
+      - "8100:8000"
     networks:
       - asxai-net
     command: python -m asxai.services.search.search_api
+
+
+  chat-worker:
+    image: asxai-engine
+    container_name: chat-worker
+    env_file:
+      - .env.compose
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ${CODE_ROOT_HOST}:${CODE_ROOT}
+      - ${PROJECT_ROOT_HOST}:${PROJECT_ROOT}
+      - ${TEMP_ROOT_HOST}:${TEMP_ROOT}
+      - ${KAGGLE_VOL_HOST}:/root/.kaggle:ro
+      - ${USERS_ROOT_HOST}:${USERS_ROOT}
+    depends_on:
+      - qdrant
+      - kafka
+      - search-worker
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - asxai-net
+    command: python -m asxai.services.chat.chat_workers
+
+  chat-api:
+    image: asxai-api
+    container_name: chat-api
+    env_file:
+      - .env.compose
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ${CODE_ROOT_HOST}:${CODE_ROOT}
+      - ${USERS_ROOT_HOST}:${USERS_ROOT}
+    depends_on:
+      - kafka
+      - chat-worker
+    ports:
+      - "8000:8000"
+    networks:
+      - asxai-net
+    command: python -m asxai.services.chat.chat_api
 
   nginx:
     image: nginx:stable
