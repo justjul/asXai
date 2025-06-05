@@ -4,7 +4,6 @@ from typing import List, Tuple, Union, TypedDict
 import time
 import pandas as pd
 
-import logging
 from asxai.logger import get_logger
 from asxai.utils import load_params
 

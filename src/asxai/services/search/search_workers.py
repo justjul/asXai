@@ -133,6 +133,8 @@ async def batch_and_save(raw_payloads):
     task_ids = [pl["task_id"] for pl in raw_payloads]
     query_ids = {pl["task_id"]: pl["query_id"]
                  for pl in raw_payloads}
+    topKs = {pl["task_id"]: pl["topK"]
+             for pl in raw_payloads}
 
     USE_CACHE = search_config['use_query_cache']
 
@@ -197,7 +199,7 @@ async def batch_and_save(raw_payloads):
     results = await qdrant.query_batch_streamed(
         query_vectors=query_embeds.tolist(),
         query_ids=task_ids,
-        topK=search_config["topk_articles"],
+        topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in task_ids],
         topK_per_paper=search_config["topk_per_article"],
         payload_filters=meta_filters,
         collection_name=qdrant.collection_name_ids,
@@ -273,10 +275,10 @@ async def batch_and_save(raw_payloads):
 
             new_payload = [
                 pl for pl in payload if pl['paperId'] not in existing_ids]
-            new_payload = new_payload[:search_config["topk_rerank"]]
+            new_payload = new_payload[:topKs[qid]]
         else:
             existing_payload = []
-            new_payload = payload[:search_config["topk_rerank"]]
+            new_payload = payload[:topKs[qid]]
 
         payload = existing_payload + new_payload
 

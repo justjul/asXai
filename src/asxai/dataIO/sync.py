@@ -1,7 +1,6 @@
 import config
 import subprocess
 
-import logging
 from asxai.logger import get_logger
 
 logger = get_logger(__name__, level=config.LOG_LEVEL)

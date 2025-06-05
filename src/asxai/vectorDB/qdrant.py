@@ -348,21 +348,23 @@ class QdrantManager:
     async def query_batch_streamed(self,
                                    query_vectors: List[List[float]],
                                    query_ids: List[int] = None,
-                                   topK: int = 5,
+                                   topKs: List[int] = None,
                                    topK_per_paper: int = 5,
                                    payload_filters: List[List] = None, **kwargs):
         if not query_ids:
             query_ids = [k for k in range(len(query_vectors))]
+        if not topKs:
+            topKs = [5] * len(query_vectors)
         if not payload_filters:
             payload_filters = [None for _ in range(len(query_vectors))]
 
         tasks = [
             self.query(query_vector=vec,
-                       topK=topK,
+                       topK=topk,
                        topK_per_paper=topK_per_paper,
                        payload_filter=filter,
                        **kwargs)
-            for vec, filter in zip(query_vectors, payload_filters)
+            for vec, filter, topk in zip(query_vectors, payload_filters, topKs)
         ]
         results = await asyncio.gather(*tasks)
         final_results = {qid: res for qid, res in zip(query_ids, results)}

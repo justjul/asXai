@@ -22,4 +22,7 @@ If you are developing a production application, we recommend using TypeScript wi
 6- npm install class-variance-authority clsx tailwind-variants
 7- npm install lucide-react
 8- npm install react-markdown remark-gfm
-8- npm run dev
+9- npm install react-router-dom
+10- npm run firebase
+11- npm install eventsource-parser
+12- npm run dev

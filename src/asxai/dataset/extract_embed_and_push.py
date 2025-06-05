@@ -18,11 +18,10 @@ from asxai.dataIO.load import load_data, update_text
 from asxai.pdf.extract_PDF import collect_extracted_batch
 
 import config
-import logging
 from asxai.logger import get_logger
 from asxai.utils import load_params
 
-logger = get_logger(__name__, level=logging.INFO)
+logger = get_logger(__name__, level=config.LOG_LEVEL)
 
 params = load_params()
 pdf_config = params["pdf"]

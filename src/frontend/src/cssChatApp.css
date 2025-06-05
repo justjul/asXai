@@ -1,0 +1,22 @@
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100% !important;
+    position: absolute;
+    z-index: 10;
+    height: 100%;
+    background-color: white;
+  }
+
+  .notebook-sidebar {
+    display: none;
+  }
+
+  .main-chat-area {
+    width: 100%;
+    padding: 0.5rem !important;
+  }
+
+  .paper-sidebar {
+    display: none;
+  }
+}

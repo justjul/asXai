@@ -1,11 +1,14 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
-})
+  plugins: [react()],
+  server: {
+    // 3) Allow HMR/WebSocket stanzas from both localhost and ngrok domain:
+    allowedHosts: [
+      'localhost',
+      'goose-beloved-kit.ngrok-free.app'
+    ],
+  },
+});

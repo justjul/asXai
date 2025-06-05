@@ -30,7 +30,8 @@ dependencies = [
 pdf = [
     "pdfminer.six",
     "selenium",
-    "psutil"
+    "psutil",
+    "gsutil",
     ]
 nlp = [
     "torch",
@@ -46,6 +47,8 @@ api = [
     "uvicorn",
     "pydantic",
     "sseclient-py",
+    "firebase-admin",
+    "prometheus-client",
     ]
 dev = [
     "ipython",

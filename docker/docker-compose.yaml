@@ -9,6 +9,7 @@ services:
       - .env.compose
     volumes:
       - ${QDRANT_VOL_HOST}:/qdrant/storage
+    restart: unless-stopped
     networks:
       - asxai-net
 
@@ -18,6 +19,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    restart: unless-stopped
     networks:
       - asxai-net
 
@@ -37,6 +39,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
     networks:
       - asxai-net
 
@@ -57,23 +60,7 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    networks:
-      - asxai-net
-
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
-    container_name: mlflow
-    command: >
-      mlflow server 
-      --host 0.0.0.0 
-      --port 5000
-    volumes:
-      - ${MODEL_ROOT_HOST}/mlflow_storage/mlruns:/mlruns
-      - ${MODEL_ROOT_HOST}/mlflow_storage/mlartifacts:/mlartifacts
-    ports:
-      - "5000:5000"
-    environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    restart: unless-stopped
     networks:
       - asxai-net
 
@@ -163,6 +150,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
     networks:
       - asxai-net
     command: python -m asxai.services.search.search_workers
@@ -182,6 +170,7 @@ services:
       - search-worker
     ports:
       - "8100:8000"
+    restart: unless-stopped
     networks:
       - asxai-net
     command: python -m asxai.services.search.search_api
@@ -211,6 +200,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
     networks:
       - asxai-net
     command: python -m asxai.services.chat.chat_workers
@@ -221,28 +211,86 @@ services:
     env_file:
       - .env.compose
     environment:
+      - DEV_BYPASS_TOKEN=${DEV_BYPASS_TOKEN}
+      - ADMIN_UIDS=${ADMIN_UIDS}
       - PYTHONUNBUFFERED=1
     volumes:
       - ${CODE_ROOT_HOST}:${CODE_ROOT}
       - ${USERS_ROOT_HOST}:${USERS_ROOT}
+      - ${GOOGLE_CREDENTIALS_HOST}:${GOOGLE_CREDENTIALS}:ro
     depends_on:
       - kafka
       - chat-worker
     ports:
       - "8000:8000"
+    restart: unless-stopped
     networks:
       - asxai-net
     command: python -m asxai.services.chat.chat_api
 
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: mlflow
+    command: >
+      mlflow server 
+      --host 0.0.0.0 
+      --port 5000
+      --static-prefix /mlflow
+    volumes:
+      - ${MODEL_ROOT_HOST}/mlflow_storage/mlruns:/mlruns
+      - ${MODEL_ROOT_HOST}/mlflow_storage/mlartifacts:/mlartifacts
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    networks:
+      - asxai-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${MONITORING_ROOT_HOST}/prometheus:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    networks:
+      - asxai-net
+    restart: unless-stopped
+    depends_on:
+      - chat-api
+      - search-api
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ${MONITORING_ROOT_HOST}/grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - asxai-net
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
   nginx:
     image: nginx:stable
-    container_name: nginx-gateway
+    container_name: nginx
     depends_on:
       - search-api
     ports:
       - "8080:80"
     volumes:
       - ./nginx:/etc/nginx:ro
+    restart: unless-stopped
     networks:
       - asxai-net
 

@@ -6,11 +6,14 @@ from typing import Optional, List
 import os
 import time
 
-from fastapi import FastAPI,  HTTPException
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse, Response
 import uvicorn
 import hashlib
 from pydantic import BaseModel
 from confluent_kafka import Producer
+
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry
 
 import config
 from asxai.logger import get_logger
@@ -26,6 +29,31 @@ SEARCH_REQ_TOPIC = "search-requests"
 HASH_LEN = search_config['hash_len']
 
 USERS_ROOT = config.USERS_ROOT
+
+
+_custom_registry = CollectorRegistry()
+
+# PROMETHEUS metrics
+REQUEST_COUNT = Counter(
+    "search_api_requests_total",
+    "Total number of HTTP requests to the search API",
+    ["method", "endpoint", "http_status"],
+    registry=_custom_registry,
+)
+
+REQUEST_LATENCY = Histogram(
+    "search_api_request_latency_seconds",
+    "Histogram of request latency (seconds) for the search API",
+    ["method", "endpoint"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    registry=_custom_registry,
+)
+
+IN_PROGRESS = Gauge(
+    "search_api_requests_in_progress",
+    "Number of in-progress HTTP requests to the search API",
+    registry=_custom_registry,
+)
 
 
 def wait_for_kafka(bootstrap_servers, retries=10, delay=3):
@@ -48,6 +76,33 @@ producer = wait_for_kafka(KAFKA_BOOTSTRAP)
 app = FastAPI(title="Search API")
 
 
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    method = request.method
+    endpoint = request.url.path
+
+    IN_PROGRESS.inc()                  # track one more in-flight request
+    start_time = time.time()
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+    except Exception:
+        status_code = 500
+        raise
+    finally:
+        latency = time.time() - start_time
+
+        REQUEST_LATENCY.labels(
+            method=method, endpoint=endpoint).observe(latency)
+        REQUEST_COUNT.labels(
+            method=method, endpoint=endpoint, http_status=status_code
+        ).inc()
+        IN_PROGRESS.dec()              # request done, decrement
+
+    return response
+
+
 # Utilities
 def hash_id(value: str, length: int = 20) -> str:
     full = hashlib.sha256(value.strip().encode()).hexdigest()
@@ -55,7 +110,7 @@ def hash_id(value: str, length: int = 20) -> str:
 
 
 def make_task_id(user_id: str, notebook_id: str) -> str:
-    return f"{hash_id(user_id, length=HASH_LEN)}/{hash_id(notebook_id, length=HASH_LEN)}"
+    return f"{user_id}/{notebook_id}"
 
 
 def result_path(task_id: str, inprogress: bool = False) -> str:
@@ -119,6 +174,7 @@ class QueryRequest(BaseModel):
     notebook_id: str
     query_id: str
     query: str
+    topK: int = search_config["topk_rerank"]
 
 
 @app.post("/search")
@@ -129,7 +185,8 @@ async def create_search(req: QueryRequest):
         "query": req.query,
         "user_id": req.user_id,
         "query_id": req.query_id,
-        "notebook_id": req.notebook_id
+        "notebook_id": req.notebook_id,
+        "topK": req.topK
     }
     print(payload)
     producer.produce(SEARCH_REQ_TOPIC, key=task_id, value=json.dumps(payload))
@@ -165,6 +222,12 @@ async def get_notebook_result(user_id: str, notebook_id: str):
 @app.get("/search/task_id")
 def generate_task_id(user_id: str, notebook_id: str):
     return {"task_id": make_task_id(user_id, notebook_id)}
+
+
+@app.get("/metrics")
+def metrics():
+    data = generate_latest(_custom_registry)
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
 
 if __name__ == "__main__":

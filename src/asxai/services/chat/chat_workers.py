@@ -13,6 +13,7 @@ import config
 from asxai.vectorDB import OllamaManager
 import torch
 import numpy as np
+import re
 import joblib
 
 from typing import Union, List
@@ -70,16 +71,31 @@ async def ollama_chat(payload, ollama_manager):
     notebook_id = payload['notebook_id']
     user_message = payload["content"]
     model_name = payload.get("model", ollama_manager.model_name)
+    topK = payload["topK"]
     model_name = ollama_manager.resolve_model(model_name)
+
+    # Load existing context from disk (if any).
     context = load_chat_context(task_id=task_id)
 
     instruct_msg = chat_config["instruct_msg"]
+    if not context:
+        prompt = (
+            f"Summarize the following user request in exactly three words. "
+            f"Do not return anything else:\n\n\"{user_message}\""
+        )
+        notebook_title = await ollama_manager.generate(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            options={"temperature": 0.0},  # deterministic
+        )
+    else:
+        notebook_title = context[-1].get('notebook_title', user_message)
 
     messages = context + \
         [{"role": "user", "content": user_message + instruct_msg}]
 
     try:
-        print(messages)
         done = False
         keep_streaming = False
         search_context = []
@@ -140,11 +156,13 @@ async def ollama_chat(payload, ollama_manager):
                     submit_search(user_id=user_id,
                                   notebook_id=notebook_id,
                                   query_id=query_id,
-                                  query=search_query)
+                                  query=search_query,
+                                  topK=topK)
                     search_context, papers = load_search_result(task_id=task_id,
                                                                 user_id=user_id,
                                                                 notebook_id=notebook_id,
-                                                                query_id=query_id)
+                                                                query_id=query_id,
+                                                                topK=topK)
 
                 refine_msg = chat_config["refine_msg"]
                 messages = context + search_context + \
@@ -156,12 +174,14 @@ async def ollama_chat(payload, ollama_manager):
                 "task_id": task_id, "timestamp": time.time(),
                 "user_id": user_id, "notebook_id": notebook_id,
                 "query_id": query_id, "model": model_name,
-                "paperIds": None, "access":  "all"},
+                "papers": None, "access":  "all",
+                'notebook_title': notebook_title},
             {"role": "assistant", "content": full_response,
                 "task_id": task_id, "timestamp": time.time(),
                 "user_id": user_id, "notebook_id": notebook_id,
                 "query_id": query_id, "model": model_name,
-                "paperIds": papers, "access":  "all"}
+                "papers": papers, "access":  "all",
+                'notebook_title': notebook_title}
         ])
         save_chat_context(task_id, new_context)
 
@@ -229,18 +249,27 @@ def load_chat_context(task_id: str):
     return []
 
 
-def submit_search(user_id: str, notebook_id: str, query_id: str, query: str):
+def submit_search(user_id: str,
+                  notebook_id: str,
+                  query_id: str,
+                  query: str,
+                  topK: int):
     SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
     payload = {
         "user_id": user_id,
         "notebook_id": notebook_id,
         "query_id": query_id,
-        "query": query
+        "query": query,
+        "topK": topK
     }
     res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
 
 
-def load_search_result(user_id: str, notebook_id: str, task_id: str, query_id: str):
+def load_search_result(user_id: str,
+                       notebook_id: str,
+                       task_id: str,
+                       query_id: str,
+                       topK: int):
     SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
     timeout = 15
     endtime = time.time() + timeout
@@ -259,7 +288,7 @@ def load_search_result(user_id: str, notebook_id: str, task_id: str, query_id: s
 
         results = []
         match_generator = (pl for pl in res if pl['query_id'] == query_id)
-        while len(results) < 5:
+        while len(results) < topK:
             try:
                 results.append(next(match_generator))
             except StopIteration:
@@ -269,10 +298,14 @@ def load_search_result(user_id: str, notebook_id: str, task_id: str, query_id: s
         search_context = []
         papers = []
         for paper in results:
+            if paper['openAccessPdf'].startswith("gs://"):
+                arxiv_id = paper['openAccessPdf'].rsplit("/", 1)[-1][:-4]
+                arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
+                paper['openAccessPdf'] = f"https://arxiv.org/pdf/{arxiv_id}"
             papers.append(paper)
             formatted_ref = ""
             formatted_ref += f"---------\n"
-            formatted_ref += f"-  ARTICLE ID: {paper['paperId']}\n"
+            formatted_ref += f"-  ARTICLE_ID: {paper['paperId']}\n"
             formatted_ref += f"-  PDF URL: {paper['openAccessPdf']}\n"
             formatted_ref += f"-  TITLE: {paper['title']}\n"
             formatted_ref += f"-  AUTHORS: {paper['authorName']}\n"
@@ -344,7 +377,7 @@ def load_retrieved_context(task_id: str):
                 for i, paper in enumerate(references[:10]):
                     formatted_ref = ""
                     formatted_ref += f"---------\n"
-                    formatted_ref += f"- ARTICLE {paper['paperId']}\n"
+                    formatted_ref += f"- ARTICLE_ID {paper['paperId']}\n"
                     formatted_ref += f"  Title: {paper['title']}\n"
                     formatted_ref += f"  Authors Names: {paper['authorName']}\n"
                     # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
