@@ -4,28 +4,29 @@ from PIL import Image
 import base64
 from io import BytesIO
 import pandas as pd
+from pathlib import Path
 
+BASE_DIR = Path(__file__).parent
+img_asxai_logo = BASE_DIR / "img" / "asXai_logo.png"
+img_arXiv_monthly = BASE_DIR / 'img'/'arxiv_submissions_monthly.png'
+img_scispace_logo = BASE_DIR / 'img'/'sciSpace_logo.png'
+img_scite_logo = BASE_DIR / 'img'/'scite_logo.png'
+img_paperdoc_logo = BASE_DIR / 'img' / 'paperDoc_logo.jpg'
+img_asxai_login = BASE_DIR / 'img' / 'Login.png'
 
-img_asxai_logo = 'img/asXai_logo.png'
-img_arXiv_monthly = 'img/arxiv_submissions_monthly.png'
-img_scispace_logo = 'img/sciSpace_logo.png'
-img_scite_logo = 'img/scite_logo.png'
-img_paperdoc_logo = 'img/paperDoc_logo.jpg'
-img_asxai_login = 'img/Login.png'
+img_pipeline = BASE_DIR / 'img'/'Pipeline_overview.svg'
+img_DB_manage = BASE_DIR / 'img'/'DB_management.svg'
+img_reranker_train_flow = BASE_DIR / 'img/Reranker_training.svg'
 
-img_pipeline = 'img/Pipeline_overview.svg'
-img_DB_manage = 'img/DB_management.svg'
-img_reranker_train_flow = 'img/Reranker_training.svg'
+metadata_sample = BASE_DIR / "data"/"metadata_sample_2025.csv"
+textdata_sample = BASE_DIR / "data"/"textdata_sample_2025.csv"
 
-metadata_sample = "data/metadata_sample_2025.csv"
-textdata_sample = "data/textdata_sample_2025.csv"
+img_chat_service = BASE_DIR / 'img'/'chat_service.svg'
+img_reranker_model = BASE_DIR / 'img'/'Reranker_model.svg'
+img_chunk_embedding = BASE_DIR / 'img'/'Chunk_embedding.svg'
+img_triplet_loss = BASE_DIR / 'img'/'Triplet_loss.svg'
 
-img_chat_service = 'img/chat_service.svg'
-img_reranker_model = 'img/Reranker_model.svg'
-img_chunk_embedding = 'img/Chunk_embedding.svg'
-img_triplet_loss = 'img/Triplet_loss.svg'
-
-img_mlops_stack = 'img/CICD.png'
+img_mlops_stack = BASE_DIR / 'img'/'CICD.png'
 
 
 @st.cache_data
@@ -166,7 +167,7 @@ st.markdown(custom_css, unsafe_allow_html=True)
 # DEBUT CODE STREAMLIT************************************************************************************************************
 
 # SOMMAIRE
-st.sidebar.image(img_asxai_logo, use_container_width=True)
+st.sidebar.image(str(img_asxai_logo), use_container_width=True)
 pages = ["Project overview", "Pipeline overview", "Dataset overview", 'Core components',
          "Performances", "Conclusions"]
 page = st.sidebar.radio("### Layout", pages)
@@ -217,11 +218,11 @@ if page == pages[0]:
 
             col1_1, col1_2, col1_3 = st.columns([1, 1, 1])
             with col1_1:
-                st.image(img_scispace_logo, width=100, caption="SciSpace")
+                st.image(str(img_scispace_logo), width=100, caption="SciSpace")
             with col1_2:
-                st.image(img_scite_logo, width=100, caption="Scite")
+                st.image(str(img_scite_logo), width=100, caption="Scite")
             with col1_3:
-                st.image(img_paperdoc_logo, width=100, caption="PaperDoc")
+                st.image(str(img_paperdoc_logo), width=100, caption="PaperDoc")
 
         with col3:
             st.subheader("📊 arXiv Monthly Submissions")
@@ -313,7 +314,7 @@ if page == pages[1]:
                         
             """)
         with col2:
-            st.image(img_pipeline, caption="System-Level Service Architecture",
+            st.image(str(img_pipeline), caption="System-Level Service Architecture",
                      use_container_width=True)
 
     with tab2:
@@ -337,10 +338,10 @@ if page == pages[1]:
 
         col1, col2, col3, col4 = st.columns([0.2, 1, 0.51, 0.69])
         with col2:
-            st.image(img_DB_manage, caption="Database management",
+            st.image(str(img_DB_manage), caption="Database management",
                      use_container_width=True)
         with col3:
-            st.image(img_reranker_train_flow, caption="Reranker training flow",
+            st.image(str(img_reranker_train_flow), caption="Reranker training flow",
                      use_container_width=True)
 
 # page 2############################################################################################################################################
@@ -392,7 +393,7 @@ if page == pages[3]:
             """)
 
         with col2:
-            st.image(img_chunk_embedding, use_container_width=True)
+            st.image(str(img_chunk_embedding), use_container_width=True)
 
     # Tab 2: Triplet Loss Model Training
     with tab2:
@@ -408,12 +409,12 @@ if page == pages[3]:
             - Optimizes the embedding space to **prioritize relevance** and **citation alignment**.
             """)
         with col2:
-            st.image(img_reranker_model, use_container_width=True,
+            st.image(str(img_reranker_model), use_container_width=True,
                      caption="8-layer reranker transformer")
 
         col1, col2, col3 = st.columns([0.8, 0.7, 0.6])
         with col2:
-            st.image(img_triplet_loss, use_container_width=True)
+            st.image(str(img_triplet_loss), use_container_width=True)
 
     # Tab 3: Chat Service
     with tab3:
@@ -431,7 +432,7 @@ if page == pages[3]:
             """)
 
         with col2:
-            st.image(img_chat_service, use_container_width=True)
+            st.image(str(img_chat_service), use_container_width=True)
 
         col1, col2 = st.columns([1, 1])
         with col1:
@@ -506,7 +507,7 @@ if page == pages[3]:
 
         col1, col2, col3 = st.columns([0.3, 1, 0.3])
         with col2:
-            st.image(img_mlops_stack, use_container_width=True)
+            st.image(str(img_mlops_stack), use_container_width=True)
 
 
 # page 4############################################################################################################################################
