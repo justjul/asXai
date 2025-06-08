@@ -1,68 +1,43 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from './firebase-auth';
 import { getAuth } from 'firebase/auth';
 
-// Helper: fetch with Firebase token
-export async function authFetch(currentUser, url, options = {}) {
-  if (!currentUser) {
-    throw new Error("No authenticated user available for authFetch");
-  }
-  const token = await currentUser.getIdToken();
-  const headers = {
-    ...options.headers,
-    Authorization: `Bearer ${token}`,
-    "ngrok-skip-browser-warning": "1",
-  };
-  return fetch(url, { ...options, headers });
-}
-
-export default function Login() {
+export default function Signup() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const { loading, signIn } = useAuth();
+  const [confirm, setConfirm] = useState('');
+  const { loading, signUp } = useAuth();
   const navigate = useNavigate();
 
   const writeIdTokenCookie = async () => {
     const currentUser = getAuth().currentUser;
     if (!currentUser) return;
-
-    // Force a fresh token so we pick up any new custom claims (e.g. admin).
     const idTokenResult = await currentUser.getIdTokenResult(true);
-    const token = idTokenResult.token;
-
-    // Store it in a Secure, SameSite=Strict cookie:
-    document.cookie = `id_token=${token}; Secure; SameSite=Strict; path=/`;
+    document.cookie = `id_token=${idTokenResult.token}; Secure; SameSite=Strict; path=/`;
   };
 
-  const handleLogin = async (e) => {
+  const handleSignup = async (e) => {
     e.preventDefault();
+    if (password !== confirm) {
+      alert("Passwords do not match");
+      return;
+    }
     try {
-      //Sign in with Firebase
-      await signIn(email, password);
-
-      //get the currentUser from Firebase Auth
-      const currentUser = getAuth().currentUser;
-      if (!currentUser) {
-        throw new Error("Firebase user not available immediately after signIn");
-      }
+      await signUp(email, password);
       await writeIdTokenCookie();
-      ////Navigate to the /n to get a new notebookId from ChatApp
-      navigate(`/n`);
+      navigate('/n');
     } catch (err) {
-      console.error("Login failed:", err);
-      alert("Login failed. Check credentials or sign up.");
+      alert("Signup failed. Try again or use a different email.");
     }
   };
 
-
-  // While AuthProvider is initializing, show nothing (or a loader)
   if (loading) return null;
 
   return (
     <div style={containerStyle}>
-      <form onSubmit={handleLogin} style={formStyle}>
-        <h2 style={{ textAlign: "center" }}>Welcome Back to asXai</h2>
+      <form onSubmit={handleSignup} style={formStyle}>
+        <h2 style={{ textAlign: "center" }}>Create an account</h2>
         <input
           type="email"
           autoComplete="username"
@@ -74,23 +49,32 @@ export default function Login() {
         />
         <input
           type="password"
-          autoComplete="current-password"
+          autoComplete="new-password"
           value={password}
           onChange={e => setPassword(e.target.value)}
           placeholder="Password"
           required
           style={inputStyle}
         />
-        <button type="submit" style={loginBtnStyle}>Login</button>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={e => setConfirm(e.target.value)}
+          placeholder="Confirm Password"
+          required
+          style={inputStyle}
+        />
+        <button type="submit" style={signupBtnStyle}>Sign Up</button>
         <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
           <span>
-            New here?{' '}
+            Already have an account?{' '}
             <a
               href="#"
-              onClick={e => { e.preventDefault(); navigate('/signup'); }}
+              onClick={e => { e.preventDefault(); navigate('/'); }}
               style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
             >
-              Sign Up
+              Login
             </a>
           </span>
         </div>
@@ -134,4 +118,7 @@ const loginBtnStyle = {
   borderRadius: "4px",
   cursor: "pointer",
 };
-
+const signupBtnStyle = {
+  ...loginBtnStyle,
+  backgroundColor: "#10b981"
+};

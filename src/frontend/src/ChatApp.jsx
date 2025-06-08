@@ -7,6 +7,7 @@ import { createParser } from 'eventsource-parser';
 import { useAuth } from './firebase-auth';
 import { getAuth } from "firebase/auth";
 import './cssChatApp.css';
+import { StickyNote } from 'lucide-react';
 
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -36,9 +37,13 @@ export default function ChatApp() {
   const [notebooks, setNotebooks] = useState([]);
   const [lastNotebookDeleted, setLastNotebookDeleted] = useState([]);
   const lastNotebookCreated = localStorage.getItem("lastNotebookCreated")
+  const activeNotebook = notebooks.find(nb => nb.id === notebookId);
+  const notebookTitle = activeNotebook ? activeNotebook.title : '';
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(true);
   const messagesEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const [autoScroll, setAutoScroll] = useState(true);
   const auth = getAuth();
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -155,10 +160,27 @@ export default function ChatApp() {
   }, [notebookId, notebooks, user]);
 
   useEffect(() => {
-    if (messagesEndRef.current) {
+    if (autoScroll && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages]);
+  }, [messages, autoScroll]);
+
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      // Are we close to the bottom?
+      const threshold = 100; // px from bottom—tune as you like
+      const atBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+
+      setAutoScroll(atBottom);
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
 
   const createNewNotebook = async () => {
@@ -455,33 +477,55 @@ export default function ChatApp() {
   const displayedPapers = selectedQueryIds.size > 0 ? papers : allReferencedPapers;
 
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
-      {/* Sidebar */}
+    <div style={{flex: 1, display: 'flex', height: '100dvh', width: '100vw', position: 'relative' }}>
+      {/* Left Sidebar */}
       <div
         className={`notebook-sidebar`}
         style={{
-          width: leftCollapsed ? '2.5rem' : '20%',
+          width: leftCollapsed ? '0rem' : isMobile ? '90vw': '20%',
+          position: isMobile ? 'absolute' : 'relative',
+          left: 0,
+          top: 0,
+          height: isMobile ? '100vh' : '100%',
+          background: 'var(--main-bg)',
+          zIndex: isMobile ? 20 : 1,
+          boxShadow: isMobile && !leftCollapsed ? '2px 0 12px rgba(0,0,0,0.09)' : 'none',
           transition: 'width 0.3s ease',
-          borderRight: '1px solid #ccc',
+          borderRight: isMobile ? 'none' : '1px solid #ccc',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
         }}
       >
-        {/* collapse/expand toggle */}
-        <button
-          onClick={() => setLeftCollapsed(!leftCollapsed)}
-          style={{
-            padding: '0.5rem',
-            border: 'none',
-            background: '#eee',
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-          }}
-        >
-          {leftCollapsed ? '📒' : '📝'}
-        </button>
-
+        {!leftCollapsed && (
+          <button
+            onClick={() => setLeftCollapsed((c) => !c)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              alignSelf: "flex-end",
+              cursor: 'pointer',
+              fontSize: '1.3rem',
+              padding: '0.5rem',
+              marginTop: "0.5rem",
+              marginRight: "2rem",
+            }}
+            title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
+          >
+            <img
+                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
+                style={{
+                  height: '1.7em', // or adjust as needed for your top bar
+                  width: '1.7em',
+                  display: 'block',
+                  margin: '0.5 rem',
+                  pointerEvents: 'none', // so clicks reach the button
+                  background: 'transparent'
+                }}
+              />
+          </button>
+        )}
         <div style={{ flex: 1, overflowY: "auto", padding: leftCollapsed ? 0 : "0.5rem" }}>
           {!leftCollapsed && (
             <>
@@ -497,7 +541,8 @@ export default function ChatApp() {
                       justifyContent: 'space-between',
                       padding: '0.25rem 0.5rem',
                       borderRadius: '4px',
-                      backgroundColor: nb.id === notebookId ? '#d1fae5' : 'transparent',
+                      backgroundColor: 'transparent',
+                      border: nb.id === notebookId ? '1px solid rgb(124, 223, 172)' : 'none',
                       marginBottom: '0.25rem',
                     }}
                   >
@@ -517,7 +562,7 @@ export default function ChatApp() {
                       onClick={() => deleteNotebook(nb.id)}
                       style={{
                         background: 'none',
-                        border: '1px solid #ccc',
+                        border: 'none',
                         cursor: 'pointer',
                         marginLeft: '0.1rem',
                         fontSize: '1.0rem',
@@ -528,23 +573,6 @@ export default function ChatApp() {
                     </button>
                   </div>
                 ))}
-
-                {/* "+" button at end of list */}
-                <button
-                  onClick={createNewNotebook}
-                  style={{
-                    width: "2.5rem",
-                    height: "2.5rem",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    border: "1px solid #ccc",
-                    borderRadius: "4px",
-                  }}
-                  title="New notebook"
-                >
-                  🗒️
-                </button>
               </div>
             </>
           )}
@@ -560,7 +588,7 @@ export default function ChatApp() {
             style={{
               padding: "0.5rem",
               border: "none",
-              background: "#eee",
+              background: "transparent",
               cursor: "pointer",
               alignSelf: "flex-start",
               fontSize: "1.1rem",
@@ -582,7 +610,7 @@ export default function ChatApp() {
             style={{
               padding: "0.5rem",
               border: "none",
-              background: "#eee",
+              background: "transparent",
               cursor: "pointer",
               alignSelf: "flex-start",
               fontSize: "1.1rem",
@@ -604,7 +632,7 @@ export default function ChatApp() {
             style={{
               padding: "0.5rem",
               border: "none",
-              background: "#eee",
+              background: "transparent",
               cursor: "pointer",
               alignSelf: "flex-start",
               fontSize: "1.1rem",
@@ -616,42 +644,170 @@ export default function ChatApp() {
           </button>
         )}
 
-        {/* Logout button at the very bottom */}
-        <button
-          onClick={logout}
-          style={{
-            padding: '0.5rem',
-            border: 'none',
-            background: '#eee',
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-            marginTop: "0.5rem",
-            color: "red",
-            fontSize: "1.5rem",
-          }}
-          title="Sign out"
-        >
-          ⏻
-        </button>
+        {/* Center: logout */}
+          <button
+            onClick={logout}
+            style={{
+              padding: "0.5rem",
+              border: '1px solid var(--main-border)',
+              background: "transparent",
+              cursor: "pointer",
+              alignSelf: "flex-center",
+              fontSize: "1.1rem",
+              marginTop: "0.5rem",
+              color: 'red'
+            }}
+            title="Sign out"
+          >
+            ⏻
+          </button>
       </div>
+      {/* Backdrop for left sidebar on mobile */}
+      {isMobile && !leftCollapsed && (
+        <div
+          onClick={() => setLeftCollapsed(true)}
+          style={{
+            position: 'fixed',
+            top: 0, left: 0, width: '100vw', height: '100vh',
+            background: 'rgba(0,0,0,0.2)',
+            zIndex: 15,
+          }}
+        />
+      )}
 
-      {/* Chat and Paper Layout (your current layout) */}
       <div 
         className="main-chat-area" 
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '1rem', borderRight: '1px solid #ccc' }}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0}}
       >
-        <div style={{ flex: 1, overflowY: 'auto', marginBottom: '1rem' }}>
+        {/* --- TOP BAR (just above chat, not above sidebars) --- */}
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            height: '3.5rem',
+            background: 'var(--main-bg)',
+            borderBottom: 'var(--main-border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: 0,
+          }}
+        >
+          {/* Left: collapse left sidebar */}
+          
+          <div style={{ flex: 1, display: "flex", justifyContent: "flex-start", paddingLeft: "1rem" }}>
+            {leftCollapsed && (
+              <button
+              onClick={() => setLeftCollapsed((c) => !c)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                padding: '0.5rem',
+                borderRadius: '50%',
+              }}
+              title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
+            >
+              <img
+                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
+                style={{
+                  height: '1.7em', // or adjust as needed for your top bar
+                  width: '1.7em',
+                  display: 'block',
+                  margin: '0.5 rem',
+                  pointerEvents: 'none', // so clicks reach the button
+                }}
+              />
+            </button>
+            )}
+            {/* Notebook Title */}
+            <span
+              style={{
+                fontWeight: "600",
+                fontSize: "1.2rem",
+                marginLeft: "0.75rem",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "18vw"  // prevents long titles from breaking layout; tweak as needed
+              }}
+            >
+              {notebookTitle}
+            </span>
+          </div>
+          {/* Center: Logo */}
+          <div style={{
+            flex: 1,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center"
+          }}>
+            <img
+              className= "logo-img"
+              alt="asXai logo"
+              style={{
+                height: "3.5rem", // adjust size as needed
+                objectFit: "contain",
+                margin: 0
+              }}
+            />
+          </div>
+          {/* Right: collapse right sidebar */}
+          <div style={{ flex: 1, display: "flex", justifyContent: "flex-end", paddingRight: "1rem" }}>
+            {rightCollapsed && (
+              <button
+              onClick={() => setRightCollapsed((c) => !c)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                padding: '0.5rem',
+                borderRadius: '50%',
+              }}
+              title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
+            >
+              <img
+                src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
+                alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
+                style={{
+                  height: '1.7em', // or adjust as needed for your top bar
+                  width: '1.7em',
+                  display: 'block',
+                  margin: '0.5 rem',
+                  pointerEvents: 'none', // so clicks reach the button
+                }}
+              />
+            </button>
+            )}
+          </div>
+        </div>
+        {/* --- END TOP BAR --- */}
+
+        <div 
+          style={{ flex: 1, 
+            overflowY: 'auto',
+            marginBottom: '1rem',
+            background: 'var(--main-bg)',
+            border: '2px solid var(--main-border)'
+            }} ref={chatContainerRef}>
           {messages.map((msg, idx) => (
             <div
               key={idx}
               onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
               style={{
-                background: msg.query_id && selectedQueryIds.has(msg.query_id) ? '#f2fcf1' : '#f3f3f3',
+                background: 'var(--main-fg)',
                 padding: '1rem',
-                borderRadius: '6px',
-                marginBottom: '0.5rem',
+                borderRadius: '1%',
                 cursor: msg.query_id ? 'pointer' : 'default',
-                border: msg.query_id && selectedQueryIds.has(msg.query_id) ? '1px solid #2563eb' : 'none',
+                border: msg.query_id && selectedQueryIds.has(msg.query_id) ? '4px solid rgb(86, 122, 84)' : "1px solid var(--main-border)",
+                marginLeft: msg.role === 'user' ? '15%' : '5%',
+                marginRight: msg.role === 'user' ? '5%' : '15%',
+                marginBottom: '1%',
+                marginTop: msg.role === 'user' ? '2%' : '1%',
               }}
             >
               <strong>{msg.role === 'user' ? '🧑 You' : '🤖 asXai'}:</strong>
@@ -703,7 +859,13 @@ export default function ChatApp() {
           ))}
           <div ref={messagesEndRef} />
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{
+          marginTop: "auto", 
+          marginBottom: "1rem",
+          display: "flex",
+          gap: "0.5rem",
+          alignItems: "flex-end"
+        }}>
           {isStreaming && (
             <div style={{
               textAlign: 'center',
@@ -715,15 +877,40 @@ export default function ChatApp() {
               <span role="img" aria-label="thinking">🤖</span> Generating answer...
             </div>
           )}
-          <input
+          <textarea
             value={question}
-            onChange={(e) => setQuestion(e.target.value)}
+            onChange={e => setQuestion(e.target.value)}
             placeholder="Ask a question..."
-            style={{ flex: 1, padding: '0.5rem', border: '1px solid #ccc', borderRadius: '4px' }}
+            rows={3}          // 2 or 3
+            style={{
+              flex: 1,
+              resize: "vertical",          // allow user to drag if you want
+              minHeight: "2.5rem",
+              maxHeight: "6rem",
+              padding: "0.75rem",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              fontSize: "1rem",
+              lineHeight: 1.3,
+              boxSizing: "border-box",
+            }}
+            onKeyDown={e => {
+              // Optional: send on Ctrl+Enter
+              if (e.shiftKey && e.key === "Enter") handleSubmit();
+            }}
           />
           <button
             onClick={handleSubmit}
-            style={{ padding: '0.5rem 1rem', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '4px' }}
+            style={{
+              padding: '0.75rem 1.25rem',
+              backgroundColor: '#2563eb',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              fontSize: '1.1rem',
+              height: 'fit-content',
+              alignSelf: 'flex-end'
+            }}
           >
             Send
           </button>
@@ -734,29 +921,49 @@ export default function ChatApp() {
       <div
         className="paper-sidebar"
         style={{
-          flexShrink: 0,
-          flexBasis: rightCollapsed ? '2.5rem' : '30%',
-          transition: 'flex-basis 0.3s ease',
-          borderLeft: '1px solid #ccc',
+          width: rightCollapsed ? '0rem' : isMobile ? '90vw': '20%',
+          position: isMobile ? 'absolute' : 'relative',
+          right: 0,
+          top: 0,
+          height: isMobile ? '100vh' : '100%',
+          background: 'var(--main-bg)',
+          zIndex: isMobile ? 20 : 1,
+          boxShadow: isMobile && !rightCollapsed ? '2px 0 12px rgba(0,0,0,0.09)' : 'none',
+          transition: 'width 0.3s ease',
+          borderLeft: isMobile ? 'none' : '1px solid var(--main-border)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
         }}
       >
-        {/* collapse/expand toggle at top of right sidebar */}
-        <button
-          onClick={() => setRightCollapsed(!rightCollapsed)}
-          style={{
-            padding: '0.5rem',
-            border: 'none',
-            background: '#eee',
-            cursor: 'pointer',
-            alignSelf: 'flex-end',
-          }}
-        >
-          {rightCollapsed ? '🗞️' : '🏛️'}
-        </button>
-
+        {!rightCollapsed && (
+          <button
+            onClick={() => setRightCollapsed((c) => !c)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              alignSelf: "flex-start",
+              cursor: 'pointer',
+              fontSize: '1.3rem',
+              padding: '0.5rem',
+              marginTop: "0.5rem",
+              marginLeft: "2rem",
+            }}
+            title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
+          >
+            <img
+                src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
+                alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
+                style={{
+                  height: '1.7em', // or adjust as needed for your top bar
+                  width: '1.7em',
+                  display: 'block',
+                  margin: '0.5 rem',
+                  pointerEvents: 'none', // so clicks reach the button
+                }}
+              />
+          </button>
+        )}
         {!rightCollapsed && (
           <div style={{ padding: '1rem', overflowY: 'auto', flex: 1 }}>
             <div
@@ -846,7 +1053,7 @@ export default function ChatApp() {
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.authorName}</div>
                   <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.publicationDate}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.paperId}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.paperId} / score {p.score?.toFixed(2)}</div>
                   {isExpanded && (
                     <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
                       {p.best_chunks?.map((chunk, idx) => (
@@ -880,6 +1087,18 @@ export default function ChatApp() {
           </div>
         )}
       </div>
+      {/* Backdrop for right sidebar on mobile */}
+      {isMobile && !rightCollapsed && (
+        <div
+          onClick={() => setRightCollapsed(true)}
+          style={{
+            position: 'fixed',
+            top: 0, right: 0, width: '100vw', height: '100vh',
+            background: 'rgba(0,0,0,0.2)',
+            zIndex: 15,
+          }}
+        />
+      )}
     </div>
   );
 }

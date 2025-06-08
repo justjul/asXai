@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import ChatApp from './ChatApp';
 import Login from './Login';
+import Signup from './Signup';
 import { AuthProvider, useAuth } from './firebase-auth';
 
 function ProtectedRoute({ children }) {
@@ -16,6 +17,7 @@ export default function App() {
       <Router>
         <Routes>
           <Route path="/" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
           <Route
             path="/n"
             element={
