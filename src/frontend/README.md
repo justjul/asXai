@@ -26,3 +26,5 @@ If you are developing a production application, we recommend using TypeScript wi
 10- npm run firebase
 11- npm install eventsource-parser
 12- npm run dev
+
+then start ngrok tunnel: ngrok start --all

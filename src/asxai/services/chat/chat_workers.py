@@ -77,7 +77,7 @@ async def ollama_chat(payload, ollama_manager):
     # Load existing context from disk (if any).
     context = load_chat_context(task_id=task_id)
 
-    instruct_msg = chat_config["instruct_msg"]
+    instruct_init = chat_config["instruct_init"]
     if not context:
         prompt = (
             f"Summarize the following user request in exactly three words. "
@@ -93,7 +93,7 @@ async def ollama_chat(payload, ollama_manager):
         notebook_title = context[-1].get('notebook_title', user_message)
 
     messages = context + \
-        [{"role": "user", "content": user_message + instruct_msg}]
+        [{"role": "user", "content": user_message + instruct_init}]
 
     try:
         done = False
@@ -114,8 +114,6 @@ async def ollama_chat(payload, ollama_manager):
             stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
             if not keep_streaming:
                 with open(stream_path, "w") as stream_file:
-                    # stream_file.write(f"\n🧑[You]:\n\n {user_message}\n")
-                    # stream_file.write(f"\n🤖[asXai]\n\n")
                     stream_file.write(f"\n")
                     stream_file.flush()
             with open(stream_path, "a") as stream_file:
@@ -164,9 +162,9 @@ async def ollama_chat(payload, ollama_manager):
                                                                 query_id=query_id,
                                                                 topK=topK)
 
-                refine_msg = chat_config["refine_msg"]
+                instruct_refine = chat_config["instruct_refine"]
                 messages = context + search_context + \
-                    [{"role": "user", "content": user_message + refine_msg}]
+                    [{"role": "user", "content": user_message + instruct_refine}]
 
         new_context = search_context
         new_context.extend([
@@ -278,7 +276,7 @@ def load_search_result(user_id: str,
             try:
                 res = requests.get(f"{SEARCH_API_URL}/search/{task_id}").json()
                 res = res['notebook']
-                if (res and res[-1]['query_id'] == query_id):
+                if (res and query_id in {r['query_id'] for r in res[-5:]}):
                     break
             except Exception as e:
                 logger.warning(

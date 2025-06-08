@@ -301,14 +301,10 @@ class QdrantManager:
                     topK: int = 5,
                     topK_per_paper: int = 5,
                     payload_filter: Union[dict, None] = None,
-                    collection_name: str = None,
                     **kwargs):
 
         if not hasattr(self, 'client'):
             self.client = AsyncQdrantClient(host=self.host, port=self.port)
-
-        if collection_name is None:
-            collection_name = self.collection_name_ids
 
         query_filter = build_qdrant_filter(payload_filter=payload_filter)
 
@@ -320,28 +316,29 @@ class QdrantManager:
             with_payload=True,
             **kwargs)
 
-        paperIds = [pt.payload['paperId'] for pt in results.points]
-        chunk_condition = FieldCondition(
-            key='paperId', match=models.MatchAny(any=paperIds))
-        query_filter = Filter(must=chunk_condition)
+        if topK_per_paper > 0:
+            paperIds = [pt.payload['paperId'] for pt in results.points]
+            chunk_condition = FieldCondition(
+                key='paperId', match=models.MatchAny(any=paperIds))
+            query_filter = Filter(must=chunk_condition)
 
-        chunk_results = await self.client.query_points_groups(
-            collection_name=self.collection_name_chunks,
-            query=query_vector,
-            query_filter=query_filter,
-            group_by="paperIdQ",
-            limit=topK,  # Max amount of groups
-            group_size=topK_per_paper,  # Max amount of points per group
-            with_payload=True,
-            **kwargs)
+            chunk_results = await self.client.query_points_groups(
+                collection_name=self.collection_name_chunks,
+                query=query_vector,
+                query_filter=query_filter,
+                group_by="paperIdQ",
+                limit=topK,  # Max amount of groups
+                group_size=topK_per_paper,  # Max amount of points per group
+                with_payload=True,
+                **kwargs)
 
-        best_texts = {}
-        for group in chunk_results.groups:
-            paperId = group.hits[0].payload['paperId']
-            best_texts[paperId] = [group.hits[k].payload['text']
-                                   for k in range(len(group.hits))]
-        for pt in results.points:
-            pt.payload['best_chunks'] = best_texts[pt.payload['paperId']]
+            best_texts = {}
+            for group in chunk_results.groups:
+                paperId = group.hits[0].payload['paperId']
+                best_texts[paperId] = [group.hits[k].payload['text']
+                                       for k in range(len(group.hits))]
+            for pt in results.points:
+                pt.payload['best_chunks'] = best_texts[pt.payload['paperId']]
 
         return results
 
@@ -355,6 +352,8 @@ class QdrantManager:
             query_ids = [k for k in range(len(query_vectors))]
         if not topKs:
             topKs = [5] * len(query_vectors)
+        if not isinstance(topKs, list):
+            topKs = [topKs]
         if not payload_filters:
             payload_filters = [None for _ in range(len(query_vectors))]
 

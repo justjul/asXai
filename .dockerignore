@@ -1,6 +1,7 @@
 # Don't copy notebooks or large files used only in dev
 notebooks/
 *.ipynb
+streamlit/
 
 # Python junk files
 __pycache__/

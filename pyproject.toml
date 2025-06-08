@@ -32,11 +32,14 @@ pdf = [
     "selenium",
     "psutil",
     "gsutil",
+    "kaggle",
     ]
-nlp = [
+torch = [
     "torch",
     "torchvision",
-    "torchaudio",
+    "torchaudio"
+    ]
+nlp = [
     "transformers",
     "sentence-transformers",
     "xformers",
@@ -61,7 +64,8 @@ dev = [
     "mypy",
     "flake8",
     "matplotlib",
-    "seaborn"
+    "seaborn",
+    "streamlit",
 ]
 
 [build-system]

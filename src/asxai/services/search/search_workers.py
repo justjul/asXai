@@ -202,7 +202,6 @@ async def batch_and_save(raw_payloads):
         topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in task_ids],
         topK_per_paper=search_config["topk_per_article"],
         payload_filters=meta_filters,
-        collection_name=qdrant.collection_name_ids,
         with_vectors=True,
     )
 
@@ -366,7 +365,7 @@ def mark_as_inprogress(task_id: str):
 
     if os.path.exists(json_path):
         os.replace(json_path, inprogress_path)
-    else:
+    elif not os.path.exists(inprogress_path):
         os.makedirs(os.path.dirname(inprogress_path), exist_ok=True)
         with open(inprogress_path, "w") as f:
             json.dump([], f)
@@ -379,10 +378,6 @@ def mark_as_complete(task_id: str):
 
     if os.path.exists(inprogress_path):
         os.replace(inprogress_path, json_path)
-    else:
-        os.makedirs(os.path.dirname(inprogress_path), exist_ok=True)
-        with open(inprogress_path, "w") as f:
-            json.dump([], f)
 
 
 def start_search_engine():

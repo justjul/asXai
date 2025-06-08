@@ -287,10 +287,23 @@ async def triplets_from_cite(qdrant,
         three_months_before = date_obj - relativedelta(months=deltaMonths)
         date_lim = three_months_before.strftime("%Y-%m-%d")
         for ref_id in ref_Ids:
-            res = await qdrant.query_batch_streamed(query_vectors=[np.random.randn(vector_size).tolist()], topK=50, filter_payloads=[['paperId', '==', ref_id]], with_vectors=True, collection_name=qdrant.collection_name_ids)
+            res = await qdrant.query_batch_streamed(query_vectors=[np.random.randn(vector_size).tolist()],
+                                                    topKs=50,
+                                                    topK_per_paper=0,
+                                                    payload_filters=[[
+                                                        ['paperId', '==', ref_id]]],
+                                                    with_vectors=True,
+                                                    )
             if res[0].points:
                 ref_embed = res[0].points[0].vector
-                res = await qdrant.query_batch_streamed(query_vectors=[ref_embed], topK=1, offset=np.random.randint(*topK_near_cite_range), filter_payloads=[['publicationDate', 'lt', date_lim], ['paperId', '!=', ref_Ids + [paper_Id]]], collection_name=qdrant.collection_name_ids)
+                res = await qdrant.query_batch_streamed(query_vectors=[ref_embed],
+                                                        topKs=1,
+                                                        topK_per_paper=0,
+                                                        offset=np.random.randint(
+                                                            *topK_near_cite_range),
+                                                        payload_filters=[[['publicationDate', 'lt', date_lim],
+                                                                         ['paperId', '!=', ref_Ids + [paper_Id]]]],
+                                                        )
                 if res[0].points:
                     pos_id = ref_id
                     neg_id = res[0].points[0].payload['paperId']
@@ -325,10 +338,10 @@ class RerankerDataset(Dataset):
         async def run_qdrant(paperIds):
             res = await self.qdrant.query_batch_streamed(
                 query_vectors=[np.random.randn(self.vector_size).tolist()],
-                topK=3,
-                filter_payloads=[['paperId', '==', paperIds]],
+                topKs=3,
+                topK_per_paper=0,
+                payload_filters=[[['paperId', '==', paperIds]]],
                 with_vectors=True,
-                collection_name=self.qdrant.collection_name_ids
             )
             embeds = {pt.payload["paperId"]: pt.vector for pt in res[0].points}
             return embeds

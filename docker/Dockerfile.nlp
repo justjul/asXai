@@ -25,4 +25,5 @@ COPY pyproject.toml README.md ./
 COPY src/asxai  ./src/asxai
 
 # Install asxai + dependencies
+RUN pip install -e .[torch]
 RUN pip install -e .[nlp,pdf]

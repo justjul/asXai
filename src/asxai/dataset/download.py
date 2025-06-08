@@ -72,14 +72,16 @@ def get_s2_articles_batch(
         if r:
             df_temp = pd.DataFrame([doc for doc in r if doc is not None])
             if not df_temp.empty:
+                df_temp['references'] = df_temp['references'].fillna('')
+
                 df_temp['openAccessPdf'] = df_temp['openAccessPdf'].apply(
                     lambda x: x['url'] if isinstance(x, dict) else x)
 
                 df_temp['referenceIds'] = df_temp['references'].apply(
-                    lambda x: ';'.join([ref['paperId'] for ref in x if ref.get('paperId')]))
+                    lambda x: ';'.join([ref['paperId'] for ref in (x or []) if ref.get('paperId')]))
 
                 df_temp['referenceTitles'] = df_temp['references'].apply(lambda x: ';'.join(
-                    [ref['title'].replace(';', ',') for ref in x if ref.get('title')]))
+                    [ref['title'].replace(';', ',') for ref in (x or []) if ref.get('title')]))
 
                 df_temp.drop(columns=['references'], inplace=True)
                 df_temp['influentialCitationCount'] = df_temp['influentialCitationCount'].fillna(
@@ -141,7 +143,13 @@ def get_s2_articles_year(
                 spec_endpoint = 'https://api.semanticscholar.org/graph/v1/paper/batch'
                 df_specs = get_s2_articles_batch(
                     spec_endpoint, df, additional_specs)
-                df = df.merge(df_specs, on='paperId', how='left')
+
+                df = df.merge(df_specs, on='paperId',
+                              how='left', suffixes=('', '_spec'))
+                # In case some column like title were made by default in the paper/batch endpoint
+                df = df.drop(
+                    columns=[col for col in df.columns if col.endswith('_spec')])
+
                 df['influentialCitationCount'] = df['influentialCitationCount'].fillna(
                     0)
                 df['openAccessPdf'] = df['openAccessPdf'].fillna('None')
@@ -216,7 +224,7 @@ def update(
             f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
         )
         articles = get_s2_articles_year(endpoint, specs_str, year)
-
+        print(articles.columns)
         metadata_fp = os.path.join(
             year_metadata_dir, f'metadata_{year}.parquet')
         text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
