@@ -7,7 +7,7 @@ import pandas as pd
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-img_asxai_logo = BASE_DIR / "img" / "asXai_logo.png"
+img_asxai_logo = BASE_DIR / "img" / "asXai_logo_black.png"
 img_arXiv_monthly = BASE_DIR / 'img'/'arxiv_submissions_monthly.png'
 img_scispace_logo = BASE_DIR / 'img'/'sciSpace_logo.png'
 img_scite_logo = BASE_DIR / 'img'/'scite_logo.png'
@@ -174,8 +174,6 @@ st.markdown(custom_css, unsafe_allow_html=True)
 
 # SOMMAIRE
 # st.sidebar.image(str(img_asxai_logo), use_container_width=True)
-language = st.sidebar.radio(
-    "Language", ["En", "Fr"], horizontal=True, label_visibility="collapsed")
 
 st.sidebar.markdown(f"""
     <a href = "https://goose-beloved-kit.ngrok-free.app/?ngrok-skip-browser-warning=true" target = "_blank" >
@@ -183,9 +181,17 @@ st.sidebar.markdown(f"""
     </a >
     """, unsafe_allow_html=True)
 
+st.sidebar.header("")
+st.sidebar.header("")
+st.sidebar.header("")
+st.sidebar.header("")
+
 pages = ["Project overview", "Pipeline overview", "Dataset overview", 'Core components',
          "Performances", "Perspectives", "Conclusions"]
-page = st.sidebar.radio("### Layout", pages)
+page = st.sidebar.radio("### Layout", pages, label_visibility="collapsed")
+
+st.sidebar.header("")
+
 st.sidebar.subheader("Authors")
 
 JF_linkedin_url = "https://www.linkedin.com/in/julien-fournier-63530537"
@@ -194,6 +200,12 @@ st.sidebar.markdown(f"""
                     - [Julien Fournier]({JF_linkedin_url})
                     - [Honorat Nembe]({HN_linkedin_url})
                     """)
+
+st.sidebar.header("")
+language = st.sidebar.radio(
+    "Language", ["En", "Fr"],
+    horizontal=True,
+    label_visibility="collapsed")
 
 
 # page 0############################################################################################################################################

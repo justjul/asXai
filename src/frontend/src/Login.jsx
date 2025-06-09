@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './firebase-auth';
 import { getAuth } from 'firebase/auth';
+import './ChatApp.css';
 
 // Helper: fetch with Firebase token
 export async function authFetch(currentUser, url, options = {}) {
@@ -62,7 +63,16 @@ export default function Login() {
   return (
     <div style={containerStyle}>
       <form onSubmit={handleLogin} style={formStyle}>
-        <h2 style={{ textAlign: "center" }}>Welcome Back to asXai</h2>
+        <img
+          className= "logo-img"
+          alt="asXai logo"
+          style={{
+            height: "3.5rem", // adjust size as needed
+            objectFit: "contain",
+            margin: 0
+          }}
+        />
+        <h2 style={{ textAlign: "center" }}>Welcome Back</h2>
         <input
           type="email"
           autoComplete="username"
@@ -106,10 +116,10 @@ const containerStyle = {
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
-  backgroundColor: "#f5f5f5",
+  backgroundColor: `var(--main-bg)`,
 };
 const formStyle = {
-  background: "white",
+  backgroundColor: `var(--main-fg)`,
   padding: "2rem",
   borderRadius: "8px",
   boxShadow: "0 4px 12px rgba(0,0,0,0.1)",

@@ -6,8 +6,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { createParser } from 'eventsource-parser';
 import { useAuth } from './firebase-auth';
 import { getAuth } from "firebase/auth";
-import './cssChatApp.css';
-import { StickyNote } from 'lucide-react';
+import './ChatApp.css';
 
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -491,7 +490,7 @@ export default function ChatApp() {
           zIndex: isMobile ? 20 : 1,
           boxShadow: isMobile && !leftCollapsed ? '2px 0 12px rgba(0,0,0,0.09)' : 'none',
           transition: 'width 0.3s ease',
-          borderRight: isMobile ? 'none' : '1px solid #ccc',
+          borderRight: isMobile ? 'none' : '1px solid var(--main-border)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
@@ -573,6 +572,23 @@ export default function ChatApp() {
                     </button>
                   </div>
                 ))}
+                 {/* "+" button at end of list */}
+                <button
+                  onClick={createNewNotebook}
+                  style={{
+                    width: "2.5rem",
+                    height: "2.5rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "1px solid #ccc",
+                    borderRadius: "4px",
+                    background: 'var(--main-bg)',
+                  }}
+                  title="New notebook"
+                >
+                  🗒️
+                </button>
               </div>
             </>
           )}
@@ -654,7 +670,7 @@ export default function ChatApp() {
               cursor: "pointer",
               alignSelf: "flex-center",
               fontSize: "1.1rem",
-              marginTop: "0.5rem",
+              margin: "2%",
               color: 'red'
             }}
             title="Sign out"
@@ -677,7 +693,11 @@ export default function ChatApp() {
 
       <div 
         className="main-chat-area" 
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0}}
+        style={{ flex: 1, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          background: 'var(--main-bg)',
+          padding: 0}}
       >
         {/* --- TOP BAR (just above chat, not above sidebars) --- */}
         <div
@@ -687,7 +707,7 @@ export default function ChatApp() {
             zIndex: 10,
             height: '3.5rem',
             background: 'var(--main-bg)',
-            borderBottom: 'var(--main-border)',
+            borderBottom: '1px solid var(--main-border)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -792,21 +812,21 @@ export default function ChatApp() {
             overflowY: 'auto',
             marginBottom: '1rem',
             background: 'var(--main-bg)',
-            border: '2px solid var(--main-border)'
+            border: 'none'
             }} ref={chatContainerRef}>
           {messages.map((msg, idx) => (
             <div
               key={idx}
               onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
               style={{
-                background: 'var(--main-fg)',
+                background: msg.query_id && selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)' : 'var(--main-fg)',
                 padding: '1rem',
                 borderRadius: '1%',
                 cursor: msg.query_id ? 'pointer' : 'default',
-                border: msg.query_id && selectedQueryIds.has(msg.query_id) ? '4px solid rgb(86, 122, 84)' : "1px solid var(--main-border)",
+                border: "none",
                 marginLeft: msg.role === 'user' ? '15%' : '5%',
-                marginRight: msg.role === 'user' ? '5%' : '15%',
-                marginBottom: '1%',
+                marginRight: msg.role === 'user' ? '5%' : '5%',
+                marginBottom: '0%',
                 marginTop: msg.role === 'user' ? '2%' : '1%',
               }}
             >
@@ -841,7 +861,7 @@ export default function ChatApp() {
                           });
                         }}
                         style={{
-                          color: isHighlighted ? '#3a6d2d' : '#2563eb',
+                          color: isHighlighted ? 'var(--main-font-link-sel)' : 'var(--main-font-link)' ,
                           textDecoration: 'underline',
                           fontWeight: isHighlighted ? 'bold' : 'normal',
                           cursor: 'pointer',
@@ -860,10 +880,9 @@ export default function ChatApp() {
           <div ref={messagesEndRef} />
         </div>
         <div style={{
-          marginTop: "auto", 
-          marginBottom: "1rem",
+          background: 'var(--main-bg)',
+          margin: "1%",
           display: "flex",
-          gap: "0.5rem",
           alignItems: "flex-end"
         }}>
           {isStreaming && (
@@ -883,14 +902,15 @@ export default function ChatApp() {
             placeholder="Ask a question..."
             rows={3}          // 2 or 3
             style={{
+              background: 'var(--main-bg)',
               flex: 1,
               resize: "vertical",          // allow user to drag if you want
               minHeight: "2.5rem",
               maxHeight: "6rem",
               padding: "0.75rem",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              fontSize: "1rem",
+              border: "1px solid var(--main-border)",
+              borderRadius: "1%",
+              fontSize: "1rem", 
               lineHeight: 1.3,
               boxSizing: "border-box",
             }}
@@ -1030,14 +1050,14 @@ export default function ChatApp() {
                   style={{
                     marginBottom: '1rem',
                     padding: '1rem',
-                    border: '1px solid #ccc',
+                    border: '1px solid var(--main-border)',
                     borderRadius: '6px',
                     cursor: 'pointer',
                     backgroundColor: highlightedPaperIds.has(p.paperId)
-                      ? '#d1fae5'
+                      ? 'var(--main-fg-sel)'
                       : isExpanded
-                      ? '#f9f9f9'
-                      : '#fff',
+                      ? 'var(--main-fg)'
+                      : 'var(--main-fg)',
                     transition: 'all 0.3s ease',
                   }}
                 >
@@ -1046,14 +1066,14 @@ export default function ChatApp() {
                       href={p.openAccessPdf}
                       target="_blank"
                       rel="noopener noreferrer"
-                      style={{ color: '#2563eb', textDecoration: 'underline' }}
+                      style={{ color: 'var(--main-font-link)', textDecoration: 'underline' }}
                     >
                       {p.title}
                     </a>
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.authorName}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.publicationDate}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#666' }}>{p.paperId} / score {p.score?.toFixed(2)}</div>
+                  <div style={{ fontSize: '0.75rem'}}>{p.authorName}</div>
+                  <div style={{ fontSize: '0.75rem'}}>{p.publicationDate}</div>
+                  <div style={{ fontSize: '0.75rem'}}>{p.paperId} / score {p.score?.toFixed(2)}</div>
                   {isExpanded && (
                     <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
                       {p.best_chunks?.map((chunk, idx) => (
@@ -1071,7 +1091,6 @@ export default function ChatApp() {
                     style={{
                       marginTop: '0.5rem',
                       fontSize: '0.75rem',
-                      color: '#2563eb',
                       cursor: 'pointer',
                       userSelect: 'none',
                       display: 'flex',

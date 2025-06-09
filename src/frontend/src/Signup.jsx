@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './firebase-auth';
 import { getAuth } from 'firebase/auth';
+import './ChatApp.css';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -37,6 +38,15 @@ export default function Signup() {
   return (
     <div style={containerStyle}>
       <form onSubmit={handleSignup} style={formStyle}>
+        <img
+          className= "logo-img"
+          alt="asXai logo"
+          style={{
+            height: "3.5rem", // adjust size as needed
+            objectFit: "contain",
+            margin: 0
+          }}
+        />
         <h2 style={{ textAlign: "center" }}>Create an account</h2>
         <input
           type="email"
@@ -90,10 +100,10 @@ const containerStyle = {
   display: "flex",
   justifyContent: "center",
   alignItems: "center",
-  backgroundColor: "#f5f5f5",
+  backgroundColor: `var(--main-bg)`,
 };
 const formStyle = {
-  background: "white",
+  background: `var(--main-fg)`,
   padding: "2rem",
   borderRadius: "8px",
   boxShadow: "0 4px 12px rgba(0,0,0,0.1)",

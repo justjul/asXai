@@ -32,15 +32,20 @@
 #root {
   --main-bg: #ffffff;
   --main-fg: #f7f7f7;
-  --main-border: #141414;
+  --main-fg-sel: #dbf0ed;
+  --main-border: #aca6a6;
+  --main-font-link: #2f82ee;
+  --main-font-link-sel:  #55ca38;
 }
 
 @media (prefers-color-scheme: dark) {
   #root {
     --main-bg: #1f1d1dda;
     --main-fg: #000000;
-    --main-border: #ccc;
-    
+    --main-fg-sel: #2d3e3f;
+    --main-border: #000000;
+    --main-font-link: #a5cafa;
+    --main-font-link-sel:  #adf89b;
   }
 }
 
