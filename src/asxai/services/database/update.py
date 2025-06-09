@@ -39,7 +39,8 @@ def update_database(mode: str = 'update',
 
         logger.info(
             f"Will now extract, embed and push new articles of {years}")
-        process(download_extract=True,
+        process(years=years,
+                download_extract=True,
                 embed_push=True,)
         # filters=[('pdf_status', '!=', 'extracted')])
 
@@ -49,7 +50,8 @@ def update_database(mode: str = 'update',
     elif mode == "push":
         logger.info(f"Pushing all articles for year {years}")
 
-        process(download_extract=True,
+        process(years=years,
+                download_extract=True,
                 embed_push=True)
 
     elif mode == "pull":

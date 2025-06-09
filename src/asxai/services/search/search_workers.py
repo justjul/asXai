@@ -135,6 +135,8 @@ async def batch_and_save(raw_payloads):
                  for pl in raw_payloads}
     topKs = {pl["task_id"]: pl["topK"]
              for pl in raw_payloads}
+    paperLocks = {pl["task_id"]: pl["paperLock"]
+                  for pl in raw_payloads}
 
     USE_CACHE = search_config['use_query_cache']
 
@@ -144,7 +146,6 @@ async def batch_and_save(raw_payloads):
     queries_to_expand, qids_to_expand = [], []
     for i, qid in enumerate(task_ids):
         mark_as_inprogress(qid)
-        existing_results[qid] = load_existing_result(qid)
 
         if (USE_CACHE
             and existing_results[qid]
@@ -195,6 +196,11 @@ async def batch_and_save(raw_payloads):
         if parsed_queries[qid]['publicationDate_end']:
             meta_filters[-1].append(['publicationDate', 'lte',
                                     parsed_queries[qid]['publicationDate_end']])
+        if paperLocks[qid]:
+            existing_results[qid] = load_existing_result(qid)
+            meta_filters[-1].append(['paperId', '==',
+                                    [pl.get('paperId') for pl in existing_results[qid]]])
+            logger.info([pl.get('paperId') for pl in existing_results[qid]])
 
     results = await qdrant.query_batch_streamed(
         query_vectors=query_embeds.tolist(),
@@ -250,36 +256,9 @@ async def batch_and_save(raw_payloads):
         for pl in payload:
             pl['main_text'] = []
 
+        payload = payload[:topKs[qid]]
+
         rerank_version_date = f"{rerankEngine.version}-{rerankEngine.training_date}"
-
-        if existing_results[qid] and existing_results[qid].get("query_id", []) == query_ids[qid]:
-            existing_payload = existing_results[qid]['result']
-            existing_ids = {item['paperId']
-                            for item in existing_payload if 'paperId' in item}
-
-            # replacing rerank_scores to make sure most payloads are
-            # reranked with the latest model
-            ids_to_rerank_score = {pl['paperId']: pl['rerank_score']
-                                   for pl in payload
-                                   if 'paperId' in pl}
-
-            for item in existing_payload:
-                paper_id = item.get('paperId')
-                # if item['rerank_score'] > 0.7:
-                #     item['user_score'] = 1
-                # else:
-                #     item['user_score'] = 0
-                if paper_id in ids_to_rerank_score:
-                    item['rerank_score'] = ids_to_rerank_score[paper_id]
-
-            new_payload = [
-                pl for pl in payload if pl['paperId'] not in existing_ids]
-            new_payload = new_payload[:topKs[qid]]
-        else:
-            existing_payload = []
-            new_payload = payload[:topKs[qid]]
-
-        payload = existing_payload + new_payload
 
         blendscorer = BlendScorer.load(qid)
         trained = blendscorer.fit(payload)
@@ -351,7 +330,7 @@ def load_existing_result(task_id: str):
     if os.path.exists(full_path):
         with open(full_path, "r") as f:
             try:
-                return []  # json.load(f)
+                return json.load(f)
             except Exception as e:
                 logger.warning(f"Could not decode result for {task_id}: {e}")
                 return []

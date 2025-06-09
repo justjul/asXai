@@ -175,6 +175,7 @@ class QueryRequest(BaseModel):
     query_id: str
     query: str
     topK: int = search_config["topk_rerank"]
+    paperLock: bool = False
 
 
 @app.post("/search")
@@ -186,7 +187,8 @@ async def create_search(req: QueryRequest):
         "user_id": req.user_id,
         "query_id": req.query_id,
         "notebook_id": req.notebook_id,
-        "topK": req.topK
+        "topK": req.topK,
+        "paperLock": req.paperLock
     }
     print(payload)
     producer.produce(SEARCH_REQ_TOPIC, key=task_id, value=json.dumps(payload))

@@ -4,6 +4,15 @@ import { useAuth } from './firebase-auth';
 import { getAuth } from 'firebase/auth';
 import './ChatApp.css';
 
+function isValidPassword(password) {
+  return (
+    password.length >= 6 &&
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /\d/.test(password)
+  );
+}
+
 export default function Signup() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -20,16 +29,20 @@ export default function Signup() {
 
   const handleSignup = async (e) => {
     e.preventDefault();
+    if (!isValidPassword(password)) {
+        alert("Password must have at least 6 characters, including a lowercase, an uppercase letter, and a number.");
+        return;
+    }
     if (password !== confirm) {
-      alert("Passwords do not match");
-      return;
+        alert("Passwords do not match");
+        return;
     }
     try {
-      await signUp(email, password);
-      await writeIdTokenCookie();
-      navigate('/n');
+        await signUp(email, password);
+        await writeIdTokenCookie();
+        navigate('/n');
     } catch (err) {
-      alert("Signup failed. Try again or use a different email.");
+        alert("Signup failed. Try again or use a different email.");
     }
   };
 

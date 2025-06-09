@@ -72,6 +72,7 @@ async def ollama_chat(payload, ollama_manager):
     user_message = payload["content"]
     model_name = payload.get("model", ollama_manager.model_name)
     topK = payload["topK"]
+    paperLock = payload["paperLock"]
     model_name = ollama_manager.resolve_model(model_name)
 
     # Load existing context from disk (if any).
@@ -155,7 +156,8 @@ async def ollama_chat(payload, ollama_manager):
                                   notebook_id=notebook_id,
                                   query_id=query_id,
                                   query=search_query,
-                                  topK=topK)
+                                  topK=topK,
+                                  paperLock=paperLock)
                     search_context, papers = load_search_result(task_id=task_id,
                                                                 user_id=user_id,
                                                                 notebook_id=notebook_id,
@@ -251,14 +253,16 @@ def submit_search(user_id: str,
                   notebook_id: str,
                   query_id: str,
                   query: str,
-                  topK: int):
+                  topK: int,
+                  paperLock: bool):
     SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
     payload = {
         "user_id": user_id,
         "notebook_id": notebook_id,
         "query_id": query_id,
         "query": query,
-        "topK": topK
+        "topK": topK,
+        "paperLock": paperLock,
     }
     res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
 

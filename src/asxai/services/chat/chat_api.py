@@ -1,11 +1,13 @@
 # Notebook API – collects chat prompts, notebook results and send back Ollama answers
 
+import shutil
 from confluent_kafka.admin import AdminClient, NewTopic
 import json
 from uuid import uuid4
 from typing import Optional, List
 import os
 import time
+import re
 
 from fastapi import FastAPI,  Request, HTTPException
 import uvicorn
@@ -18,10 +20,10 @@ from confluent_kafka import Producer, Consumer
 import config
 from asxai.logger import get_logger
 from asxai.utils import load_params, running_inside_docker
-from ..authenticate.auth import verify_token, set_admin_claim, revoke_admin_claim
+from ..authenticate.auth import verify_token, set_admin_claim, revoke_admin_claim, get_firebase_users
 from fastapi import Depends
 from contextlib import asynccontextmanager
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry, Summary
 
 logger = get_logger(__name__, level=config.LOG_LEVEL)
 
@@ -56,6 +58,17 @@ REQUEST_LATENCY = Histogram(
 IN_PROGRESS = Gauge(
     "chat_api_requests_in_progress",
     "Number of in-progress HTTP requests to the chat API",
+    registry=_custom_registry,
+)
+
+STREAM_FIRST_TOKEN = Summary(
+    "stream_first_token_seconds",
+    "Time to first token",
+    registry=_custom_registry,
+)
+STREAM_TOTAL_DURATION = Summary(
+    "stream_total_duration_seconds",
+    "Total stream duration",
     registry=_custom_registry,
 )
 
@@ -116,10 +129,15 @@ app.add_middleware(
 )
 
 
+def sanitize_endpoint(path):
+    # Replace notebook IDs with :id for grouping
+    return re.sub(r'/notebook/[^/]+', '/notebook/:id', path)
+
+
 @app.middleware("http")
 async def prometheus_metrics_middleware(request: Request, call_next):
     method = request.method
-    endpoint = request.url.path
+    endpoint = sanitize_endpoint(request.url.path)
 
     IN_PROGRESS.inc()                  # track one more in-flight request
     start_time = time.time()
@@ -196,6 +214,16 @@ def delete_task(task_id: str) -> str:
     return res
 
 
+def delete_user(user_id: str) -> str:
+    user_path = os.path.join(USERS_ROOT, f"{user_id}")
+    if os.path.isdir(user_path):
+        shutil.rmtree(user_path)
+        return {"user_id": user_id,
+                "status": 'deleted',
+                }
+    return {}
+
+
 def list_notebooks(user_id: str) -> List[str]:
     user_dir = os.path.join(USERS_ROOT, user_id)
     if not os.path.exists(user_dir):
@@ -213,6 +241,10 @@ def list_notebooks(user_id: str) -> List[str]:
             except Exception:
                 continue
     return notebooks
+
+
+def list_users():
+    return os.listdir(USERS_ROOT)
 
 
 def get_result(task_id: str, timeout: float = search_config['timeout']) -> Optional[dict]:
@@ -247,6 +279,7 @@ class ChatRequest(BaseModel):
     message: str
     model: str = "default"
     topK: int = search_config["topk_rerank"]
+    paperLock: bool = False
 
 
 @app.post("/notebook/{notebook_id}/chat")
@@ -264,6 +297,7 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
         "role": "user",
         "model": req.model,
         "topK": req.topK,
+        "paperLock": req.paperLock,
         "timestamp": time.time(),
         "done": 0
     }
@@ -283,6 +317,9 @@ def stream_response(notebook_id: str, decoded_token: dict = Depends(verify_token
     task_id = f"{user_id}/{notebook_id}"
 
     def event_stream():
+        starttime = time.time()
+        first_token_sent = False
+
         stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
 
         # Wait for the file to be created
@@ -311,7 +348,12 @@ def stream_response(notebook_id: str, decoded_token: dict = Depends(verify_token
 
                     if line == "<END_OF_MESSAGE>":
                         break
+
+                    if not first_token_sent:
+                        STREAM_FIRST_TOKEN.observe(time.time() - starttime)
+                        first_token_sent = True
         finally:
+            STREAM_TOTAL_DURATION.observe(time.time() - starttime)
             # Cleanup the stream file after completion
             try:
                 os.remove(stream_path)
@@ -478,6 +520,29 @@ def generate_task_id(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     print(user_id)
     return create_task_id(user_id)
+
+
+@app.get("/admin/delete_ghost_users")
+async def delete_notebook(decoded_token: dict = Depends(verify_token)):
+    if not decoded_token.get("admin"):
+        raise HTTPException(status_code=403, detail="Admins only")
+
+    user_ids = list_users()
+    firebase_users = get_firebase_users()
+    valid_users = set()
+    for uid in firebase_users:
+        safe_uid = safe_user_id(uid)
+        valid_users.add(safe_uid)
+
+    users_to_delete = [uid for uid in user_ids if uid not in {
+        v[:len(uid)] for v in valid_users}]
+
+    deleted_users = []
+    for uid in users_to_delete:
+        res = delete_user(uid)
+        deleted_users.append(res.get("user_id"))
+
+    return {"deleted_user_ids": deleted_users}
 
 
 @app.post("/admin/set_admin_rights")

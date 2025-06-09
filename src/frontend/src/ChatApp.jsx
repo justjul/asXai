@@ -40,6 +40,7 @@ export default function ChatApp() {
   const notebookTitle = activeNotebook ? activeNotebook.title : '';
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(true);
+  const [lockArticleList, setLockArticleList] = useState(false);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -233,7 +234,11 @@ export default function ChatApp() {
       const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json'},
-        body: JSON.stringify({ message: question, notebook_id: `${notebookId}`, topK }),
+        body: JSON.stringify({
+          message: question, 
+          notebook_id: `${notebookId}`, 
+          topK: topK,
+          paperLock: lockArticleList,}),
       });
       if (!res.ok) throw new Error('Failed to submit chat message');
       const data = await res.json();
@@ -497,40 +502,48 @@ export default function ChatApp() {
         }}
       >
         {!leftCollapsed && (
-          <button
-            onClick={() => setLeftCollapsed((c) => !c)}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              alignSelf: "flex-end",
-              cursor: 'pointer',
-              fontSize: '1.3rem',
-              padding: '0.5rem',
-              marginTop: "0.5rem",
-              marginRight: "2rem",
-            }}
-            title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
-          >
-            <img
-                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
-                alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
-                style={{
-                  height: '1.7em', // or adjust as needed for your top bar
-                  width: '1.7em',
-                  display: 'block',
-                  margin: '0.5 rem',
-                  pointerEvents: 'none', // so clicks reach the button
-                  background: 'transparent'
-                }}
-              />
-          </button>
+           <div 
+           style={{
+            display: 'flex', 
+            overflowY: 'auto',
+            justifyContent: 'space-between',  // <-- This is key
+            alignItems: 'center',
+            width: '100%',
+            marginBottom: '0.5rem'
+            }}>
+            <h2 style={{margin: '1%', fontWeight: 'bold'}}>Notebooks</h2>
+            <button
+              onClick={() => setLeftCollapsed((c) => !c)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                padding: '0.5rem',
+                margin: 0,
+              }}
+              title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
+            >
+              <img
+                  src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                  alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
+                  style={{
+                    height: '1.7em', // or adjust as needed for your top bar
+                    width: '1.7em',
+                    display: 'block',
+                    marginRight: '1%',
+                    pointerEvents: 'none', // so clicks reach the button
+                    background: 'transparent',
+                  }}
+                />
+            </button>
+          </div>
         )}
         <div style={{ flex: 1, overflowY: "auto", padding: leftCollapsed ? 0 : "0.5rem" }}>
           {!leftCollapsed && (
             <>
               {/* Notebook list container—make this grow to fill the middle */}
               <div style={{ padding: '0.5rem', flex: 1, overflowY: 'auto' }}>
-                <h3 style={{ marginBottom: '0.5rem' }}>Notebooks</h3>
                 {notebooks.map((nb) => (
                   <div
                     key={nb.id}
@@ -941,7 +954,7 @@ export default function ChatApp() {
       <div
         className="paper-sidebar"
         style={{
-          width: rightCollapsed ? '0rem' : isMobile ? '90vw': '20%',
+          width: rightCollapsed ? '0rem' : isMobile ? '90vw': '30%',
           position: isMobile ? 'absolute' : 'relative',
           right: 0,
           top: 0,
@@ -957,33 +970,86 @@ export default function ChatApp() {
         }}
       >
         {!rightCollapsed && (
-          <button
-            onClick={() => setRightCollapsed((c) => !c)}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              alignSelf: "flex-start",
-              cursor: 'pointer',
-              fontSize: '1.3rem',
-              padding: '0.5rem',
-              marginTop: "0.5rem",
-              marginLeft: "2rem",
-            }}
-            title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
-          >
-            <img
-                src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
-                alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
-                style={{
-                  height: '1.7em', // or adjust as needed for your top bar
-                  width: '1.7em',
-                  display: 'block',
-                  margin: '0.5 rem',
-                  pointerEvents: 'none', // so clicks reach the button
-                }}
+          <div 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between',}}>
+            <button
+              onClick={() => setRightCollapsed((c) => !c)}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                alignSelf: "flex-start",
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                padding: '0.5rem',
+                marginTop: "0.5rem",
+                marginLeft: "1%",
+              }}
+              title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
+            >
+              <img
+                  src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
+                  alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
+                  style={{
+                    height: '1.7em', // or adjust as needed for your top bar
+                    width: '1.7em',
+                    display: 'block',
+                    pointerEvents: 'none', // so clicks reach the button
+                  }}
+                />
+            </button>
+            <h2 
+              style={{
+                fontSize: '1.25rem',
+                fontStyle: lockArticleList ? 'italic' : 'normal',
+                fontWeight: lockArticleList ? 'normal' : 'bold',
+                }}>
+              Top Articles
+            </h2>
+            <button
+              onClick={() => setLockArticleList(l => !l)}
+              title={lockArticleList ? "Unlock articles" : "Lock articles"}
+              style={{
+                border: lockArticleList ? '1px solid rgb(236, 116, 230)' : 'none',
+                background: lockArticleList ? 'rgb(243, 214, 207)' : 'none',
+                cursor: 'pointer',
+                fontSize: '1.5rem',
+                margin: '0.1rem'
+              }}
+            >
+              {lockArticleList ? '🔒' : '🔓'}
+            </button>
+            <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
+                <label
+                  style={{
+                    position: 'relative',
+                    display: 'inline-block',
+                    width: '5%',
+                    height: '2%',
+                  }}
+                >
+                </label>
+              </label>
+            </div>
+            <div style={{ display: 'flex', marginRight: '1%', gap: '0rem'}}>
+              <label htmlFor="topK">TopK:</label>
+              <input
+                type="range"
+                id="topK"
+                min="5"
+                max="15"
+                step="5"
+                value={topK}
+                onChange={(e) => setTopK(parseInt(e.target.value))}
               />
-          </button>
+              <span>{topK}</span>
+            </div>
+          </div>
         )}
+
         {!rightCollapsed && (
           <div style={{ padding: '1rem', overflowY: 'auto', flex: 1 }}>
             <div
@@ -994,35 +1060,6 @@ export default function ChatApp() {
                 marginBottom: '1rem',
               }}
             >
-              <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>Top Articles</h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <label
-                      style={{
-                        position: 'relative',
-                        display: 'inline-block',
-                        width: '40px',
-                        height: '20px',
-                      }}
-                    >
-                    </label>
-                  </label>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <label htmlFor="topK">TopK:</label>
-                  <input
-                    type="range"
-                    id="topK"
-                    min="5"
-                    max="15"
-                    step="5"
-                    value={topK}
-                    onChange={(e) => setTopK(parseInt(e.target.value))}
-                  />
-                  <span>{topK}</span>
-                </div>
-              </div>
             </div>
             {displayedPapers.map((p, i) => {
               const isExpanded = expandedIndexes.has(i);

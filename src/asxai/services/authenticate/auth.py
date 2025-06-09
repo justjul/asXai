@@ -25,7 +25,8 @@ def verify_token(request: Request):
     dev_bypass = request.headers.get("X-Dev-Bypass")
     if dev_bypass == DEV_BYPASS_TOKEN:
         logger.info("Authentication bypassed for dev user")
-        return {"uid": "dev_user"}
+        admin = request.headers.get("admin")
+        return {"uid": "dev_user", "admin": admin}
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(
@@ -69,3 +70,13 @@ def revoke_admin_claim(target_uids: list[str] | None = None):
     except Exception as e:
         raise logger.error(
             f"Failed to revoke admin rights for {target_uids}: {e}")
+
+
+def get_firebase_users():
+    user_ids = []
+    page = firebase_auth.list_users()
+    while page:
+        for user in page.users:
+            user_ids.append(user.uid)
+        page = page.get_next_page()
+    return user_ids
