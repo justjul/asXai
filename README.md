@@ -29,7 +29,7 @@ Try the live version (if deployed):
 - `chat-api/`: FastAPI endpoint that manages conversation flow and SSE
 - `chat-worker/`: Handles LLM responses and calls to search-worker to integrate citations
 - `search-api/`: API to dispatch search queries to workers
-- `search-worker/`: Embeds queries and retrieve documents with Qdrant and rerank them
+- `search-worker/`: Embeds queries, retrieve documents and rerank them
 
 ### 🦖 Offline Services
 
@@ -51,13 +51,15 @@ Try the live version (if deployed):
 
 ## 📦 Installation
 
+- when using with Docker:
 ```bash
 git clone https://github.com/yourusername/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
-docker-compose --env-file .env.compose up -d
 ```
-
+- If you prefer running everything in your environment
+```bash
+pip install -e .[torch,nlp,api,pdf,dev]
 
 ## 🚀 Start service
 
