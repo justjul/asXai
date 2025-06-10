@@ -20,7 +20,6 @@ Try the live version (if deployed):
 - **Monitoring & MLOps**: Integrated with MLflow, Prometheus, and Grafana
 - **Offline update pipeline**: Download, parse, embed and index scientific PDFs
 
----
 
 ## 👷🏻‍♀️System Architecture
 
@@ -36,7 +35,6 @@ Try the live version (if deployed):
 
 - `update-service/`: Downloads articles, extracts PDFs, embeds and pushes to DB, train the reranker
 
----
 
 ## 🛠️ Technologies Used
 
@@ -50,7 +48,6 @@ Try the live version (if deployed):
 | ML Ops        | MLflow, Prometheus, Grafana                             |
 | Auth          | Firebase                                                |
 
----
 
 ## 📦 Installation
 
@@ -61,7 +58,6 @@ cp .env.compose.example .env.compose
 docker-compose --env-file .env.compose up -d
 ```
 
----
 
 ## 🚀 Start service
 
