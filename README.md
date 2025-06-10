@@ -59,7 +59,8 @@ git clone https://github.com/yourusername/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
 docker-compose --env-file .env.compose up -d
-```
+```bash
+
 ---
 
 ## 🚀 Start service
