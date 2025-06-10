@@ -114,12 +114,13 @@ class PDFdownloader:
         waitforSession = 0
         max_retries = 3
         retry_delay = 3
+        conn_timeout = 60
         while waitforSession < max_retries:
             try:
                 # driver = webdriver.Chrome(service=service, options=options)
                 driver = webdriver.Remote(command_executor=self.selenium_hub_url,
                                           options=options)
-                RemoteConnection.set_timeout(10)
+                RemoteConnection.set_timeout(conn_timeout)
                 break
             except Exception as e:
                 logger.warning(
@@ -133,9 +134,9 @@ class PDFdownloader:
             logger.error(
                 f"Failed to create a Selenium session after {max_retries} attempts"
             )
-            raise RuntimeError(
-                f"Failed to create a Selenium session after {max_retries} attempts"
-            )
+            # raise RuntimeError(
+            #     f"Failed to create a Selenium session after {max_retries} attempts"
+            # )
 
         time.sleep(0.5)
 
@@ -469,7 +470,8 @@ def download_PDFs(
                             download_pool.join()
 
                 except Exception as e:
-                    pbar.close()
-                    raise e
+                    logger.error(f"Fatal error: {e}")
+                    # pbar.close()
+                    # raise e
 
     os.mkdir(os.path.join(downloads_dir, 'done'))

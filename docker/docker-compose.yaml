@@ -88,6 +88,7 @@ services:
       - SE_EVENT_BUS_PUBLISH_PORT=4442
       - SE_EVENT_BUS_SUBSCRIBE_PORT=4443
       - SE_VNC_NO_PASSWORD=1
+      - SE_NODE_MAX_SESSIONS=1
     volumes:
       - ${TEMP_ROOT_HOST}/downloads:/home/seluser/Downloads
     networks:
@@ -96,7 +97,7 @@ services:
       replicas: ${NB_CHROME_NODES} 
 
   database-update:
-    image: asxai-engine
+    image: justjul/asxai-torch:latest
     container_name: database-update
     profiles: ["update"]
     env_file:
@@ -125,7 +126,7 @@ services:
       - asxai-net
 
   search-worker:
-    image: asxai-engine
+    image: justjul/asxai-torch:latest
     container_name: search-worker
     env_file:
       - .env.compose
@@ -156,7 +157,7 @@ services:
     command: python -m asxai.services.search.search_workers
 
   search-api:
-    image: asxai-api
+    image: justjul/asxai-api:latest
     container_name: search-api
     env_file:
       - .env.compose
@@ -177,7 +178,7 @@ services:
 
 
   chat-worker:
-    image: asxai-engine
+    image: justjul/asxai-torch:latest
     container_name: chat-worker
     env_file:
       - .env.compose
@@ -206,7 +207,7 @@ services:
     command: python -m asxai.services.chat.chat_workers
 
   chat-api:
-    image: asxai-api
+    image: justjul/asxai-api:latest
     container_name: chat-api
     env_file:
       - .env.compose

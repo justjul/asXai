@@ -116,7 +116,7 @@ pdf:
   max_pages_end: null
   extract_ref: False
   timeout_loadpage: 15
-  timeout_startdw: 5
+  timeout_startdw: 15
   save_pdfs_to: null
   keep_pdfs: false
 
