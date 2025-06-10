@@ -54,7 +54,7 @@ Try the live version (if deployed):
 
 ## 📦 Installation
 
-```
+```bash
 git clone https://github.com/yourusername/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
