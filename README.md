@@ -1,14 +1,12 @@
-![asXai Logo](<img src="./src/frontend/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />)
-# Scientific RAG Pipeline
+<div align="center">
+  <img src="./src/frontend/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />
+</div>
 
-**asXai** is an open-source, containerized Retrieval-Augmented Generation (RAG) pipeline designed for the scientific research domain. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
+**asXai** is an open-source, containerized RAG pipeline (Retrieval-Augmented Generation) designed for scientific questions. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
+
+👉 Try the live [demo](https://goose-beloved-kit.ngrok-free.app) (if deployed)
 
 ---
-
-## 📚 Demo
-Try the live version (if deployed):
-👉 asXai Live Demo
-🔐 Auth required via Firebase (email/password)
 
 ## 💡Features
 
@@ -51,13 +49,13 @@ Try the live version (if deployed):
 
 ## 📦 Installation
 
-- when using with Docker:
+- Using Docker compose:
 ```bash
 git clone https://github.com/yourusername/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
 ```
-- If you prefer running everything in your environment
+- If you also want a local environment
 ```bash
 pip install -e .[torch,nlp,api,pdf,dev]
 ```
@@ -72,4 +70,4 @@ docker-compose --env-file .env.compose up -d
 
 ## 🤝 Contributing
 Pull requests and issues are welcome!
-If you use this pipeline in research, please consider citing or starring the repository.
+If you use this pipeline or want to deploy it for real, please star the repo and drop me a message.
