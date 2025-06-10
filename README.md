@@ -60,6 +60,8 @@ cp .env.compose.example .env.compose
 - If you prefer running everything in your environment
 ```bash
 pip install -e .[torch,nlp,api,pdf,dev]
+```
+
 
 ## 🚀 Start service
 
