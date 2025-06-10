@@ -5,44 +5,43 @@
 
 ---
 
-## 🚀 Features
+## 💡Features
 
 - **Retrieval-Augmented Generation** using LLMs grounded in live academic sources
-- **Chat with citations**: Ask technical questions and receive answers with linked article references
+- **Chat with citations**: Ask questions and receive answers with linked article references
 - **Real-time streaming** via Server-Sent Events (SSE)
 - **Citation-aware reranker** trained with triplet loss
-- **Fully containerized** (Docker Compose, Kafka, Ollama, FastAPI, Qdrant, React)
+- **Fully containerized** (Docker Compose, Ollama, Qdrant, Kafka, Selenium, ...)
 - **Monitoring & MLOps**: Integrated with MLflow, Prometheus, and Grafana
 - **Offline update pipeline**: Download, parse, embed and index scientific PDFs
 
 ---
 
-## 📐 System Architecture
+## 👷🏻‍♀️System Architecture
 
-### 🔧 Online Services
+### 🌐 Online Services
 
-- `frontend/`: Vite + React UI with Firebase Auth and article sidebar
+- `frontend/`: Vite + React UI with Firebase Auth
 - `chat-api/`: FastAPI endpoint that manages conversation flow and SSE
-- `chat-worker/`: Handles LLM responses and integrates citation scores
+- `chat-worker/`: Handles LLM responses and calls to search-worker to integrate citations
 - `search-api/`: API to dispatch search queries to workers
-- `search-worker/`: Embeds queries and reranks retrieved documents
-- `retrieval/`: Qdrant vector DB + reranker inference + logistic blender
+- `search-worker/`: Embeds queries and retrieve documents with Qdrant and rerank them
 
-### 🗃️ Offline Services
+### 🦖 Offline Services
 
-- `update-service/`: Downloads articles, extracts PDFs, embeds and pushes to DB
-- `train-reranker/`: Trains reranker model using triplet loss and logs to MLflow
+- `update-service/`: Downloads articles, extracts PDFs, embeds and pushes to DB, train the reranker
 
 ---
 
-## 🧪 Technologies Used
+## 🛠️ Technologies Used
 
 | Layer         | Stack                                                   |
-|---------------|----------------------------------------------------------|
+|---------------|---------------------------------------------------------|
 | LLM backend   | [Ollama](https://ollama.com/) (e.g., `gemma:12b`)       |
 | Vector DB     | [Qdrant](https://qdrant.tech/)                          |
 | Embeddings    | `e5-large-instruct`                                     |
-| Frameworks    | FastAPI, React, Kafka, Docker                           |
+| Rerank model  | Transformer trained with PyTorch                        |
+| Frameworks    | Docker, FastAPI, Kafka, React                           |
 | ML Ops        | MLflow, Prometheus, Grafana                             |
 | Auth          | Firebase                                                |
 
@@ -52,6 +51,14 @@
 
 ```bash
 git clone https://github.com/yourusername/asXai.git
-cd asXai
-cp .env.example .env
-docker-compose up --build
+cd asXai/docker
+cp .env.compose.example .env.compose
+docker-compose --env-file .env.compose up -d
+
+---
+
+## 🚀 Start service
+
+```bash
+cd asXai/docker
+docker-compose --env-file .env.compose up -d
