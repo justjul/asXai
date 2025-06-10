@@ -40,7 +40,7 @@ Try the live version (if deployed):
 
 | Layer         | Stack                                                   |
 |---------------|---------------------------------------------------------|
-| LLM backend   | [Ollama](https://ollama.com/) (e.g., `gemma:12b`)       |
+| LLM backend   | [Ollama](https://ollama.com/) (e.g., `gemma3:12b`)       |
 | Vector DB     | [Qdrant](https://qdrant.tech/)                          |
 | Embeddings    | `e5-large-instruct`                                     |
 | Rerank model  | Transformer trained with PyTorch                        |

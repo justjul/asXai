@@ -26,7 +26,8 @@ def verify_token(request: Request):
     if dev_bypass == DEV_BYPASS_TOKEN:
         logger.info("Authentication bypassed for dev user")
         admin = request.headers.get("admin")
-        return {"uid": "dev_user", "admin": admin}
+        user_id = request.headers.get("user_id")
+        return {"uid": user_id, "admin": admin}
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(

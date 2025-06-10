@@ -17,7 +17,8 @@ def update_database(mode: str = 'update',
                     years: Union[int, List[int]] = datetime.now().year,
                     min_citations_per_year: float = s2_config['min_citations_per_year'],
                     fields_of_study: List[str] = s2_config['fields_of_study'],
-                    update_reranker: bool = False):
+                    update_reranker: bool = False,
+                    only_new: bool = False):
     """
     Args:
         mode: "update", "push", "pull", or "nothing".
@@ -26,6 +27,9 @@ def update_database(mode: str = 'update',
         fields_of_study: List of fields to include.
         update_reranker: Whether to retrain the reranker model.
     """
+
+    filters = [('pdf_status', '!=', 'extracted')] if only_new else None
+
     if mode == "update":
         logger.info(f"Starting update for year {years}")
         update(years=years,
@@ -41,8 +45,8 @@ def update_database(mode: str = 'update',
             f"Will now extract, embed and push new articles of {years}")
         process(years=years,
                 download_extract=True,
-                embed_push=True,)
-        # filters=[('pdf_status', '!=', 'extracted')])
+                embed_push=True,
+                filters=filters)
 
         logger.info(f"Updating all payloads for year {years}")
         update_payloads(years=years)
@@ -52,7 +56,8 @@ def update_database(mode: str = 'update',
 
         process(years=years,
                 download_extract=True,
-                embed_push=True)
+                embed_push=True,
+                filters=filters)
 
     elif mode == "pull":
         logger.info(f"Fetching articles for year {years}")
@@ -60,6 +65,9 @@ def update_database(mode: str = 'update',
         update(years=years,
                min_citations_per_year=min_citations_per_year,
                fields_of_study=fields_of_study)
+
+        logger.info(f"Updating all payloads for year {years}")
+        update_payloads(years=years)
 
     else:
         logger.warning(f"Unsupported mode: {mode}")
