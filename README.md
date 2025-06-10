@@ -1,8 +1,7 @@
-# 🤖 asXai — Scientific RAG Pipeline
+![asXai Logo](./src/frontend/public/asXai_logo_black.svg)
+# Scientific RAG Pipeline
 
 **asXai** is an open-source, containerized Retrieval-Augmented Generation (RAG) pipeline designed for the scientific research domain. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
-
-![asXai Logo](./src/frontend/public/asXai_logo_black.svg)
 
 ---
 
