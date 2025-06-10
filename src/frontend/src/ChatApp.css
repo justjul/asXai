@@ -36,7 +36,8 @@
   --main-border: #aca6a6;
   --main-font-link: #2f82ee;
   --main-font-link-sel:  #55ca38;
-  --main-font: #252323;
+  --main-font-color: #6d6b6b;
+  --main-font: 'Roboto', sans-serif
 }
 
 @media (prefers-color-scheme: dark) {
@@ -47,7 +48,7 @@
     --main-border: #000000;
     --main-font-link: #a5cafa;
     --main-font-link-sel:  #adf89b;
-    --main-font: #ffffff;
+    --main-font-color: #e0e0e0;
   }
 }
 

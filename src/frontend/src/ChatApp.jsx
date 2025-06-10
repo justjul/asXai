@@ -511,7 +511,14 @@ export default function ChatApp() {
             width: '100%',
             marginBottom: '0.5rem'
             }}>
-            <h2 style={{margin: '1%', fontWeight: 'bold'}}>Notebooks</h2>
+            <h2 style={{
+              margin: '1%', 
+              fontWeight: 'bold',
+              color: 'var(--main-font-color)',
+              fontFamily: 'var(--main-font)',
+              }}>
+                Notebooks
+            </h2>
             <button
               onClick={() => setLeftCollapsed((c) => !c)}
               style={{
@@ -544,6 +551,34 @@ export default function ChatApp() {
             <>
               {/* Notebook list container—make this grow to fill the middle */}
               <div style={{ padding: '0.5rem', flex: 1, overflowY: 'auto' }}>
+                {/* "+" button at end of list */}
+                <button
+                  onClick={createNewNotebook}
+                  style={{
+                    width: "2.5rem",
+                    height: "2.5rem",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: 'none',
+                    borderRadius: "4px",
+                    background: 'var(--main-bg)',
+                  }}
+                  title="New notebook"
+                >
+                  <img
+                    src= "/asXai_newnotebook_icon.svg"
+                    alt= "New notebook"
+                    style={{
+                      height: '1.7em', // or adjust as needed for your top bar
+                      width: '1.7em',
+                      display: 'block',
+                      marginRight: '1%',
+                      pointerEvents: 'none', // so clicks reach the button
+                      background: 'transparent',
+                    }}
+                  />
+                </button>
                 {notebooks.map((nb) => (
                   <div
                     key={nb.id}
@@ -556,6 +591,8 @@ export default function ChatApp() {
                       backgroundColor: 'transparent',
                       border: nb.id === notebookId ? '1px solid rgb(124, 223, 172)' : 'none',
                       marginBottom: '0.25rem',
+                      fontFamily: 'var(--main-font)',
+                      color: 'var(--main-font-color)',
                     }}
                   >
                     {/* clicking the title navigates into that notebook */}
@@ -585,23 +622,6 @@ export default function ChatApp() {
                     </button>
                   </div>
                 ))}
-                 {/* "+" button at end of list */}
-                <button
-                  onClick={createNewNotebook}
-                  style={{
-                    width: "2.5rem",
-                    height: "2.5rem",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    border: "1px solid #ccc",
-                    borderRadius: "4px",
-                    background: 'var(--main-bg)',
-                  }}
-                  title="New notebook"
-                >
-                  🗒️
-                </button>
               </div>
             </>
           )}
@@ -681,14 +701,26 @@ export default function ChatApp() {
               border: '1px solid var(--main-border)',
               background: "transparent",
               cursor: "pointer",
-              alignSelf: "flex-center",
+              justifyContent: "center",
+              display: "flex",
+              alignItems: "center", 
               fontSize: "1.1rem",
               margin: "2%",
               color: 'red'
             }}
             title="Sign out"
           >
-            ⏻
+            <img
+              src= "/asXai_signout_icon.svg"
+              alt= "Sign out"
+              style={{
+                height: '1.7em', // or adjust as needed for your top bar
+                width: '1.7em',
+                display: 'block',
+                pointerEvents: 'none', // so clicks reach the button
+                background: 'transparent',
+              }}
+            />
           </button>
       </div>
       {/* Backdrop for left sidebar on mobile */}
@@ -765,7 +797,9 @@ export default function ChatApp() {
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                maxWidth: "18vw"  // prevents long titles from breaking layout; tweak as needed
+                maxWidth: "18vw",  // prevents long titles from breaking layout
+                color: 'var(--main-font-color)',
+                fontFamily: 'var(--main-font)',
               }}
             >
               {notebookTitle}
@@ -843,7 +877,16 @@ export default function ChatApp() {
                 marginTop: msg.role === 'user' ? '2%' : '1%',
               }}
             >
-              <strong>{msg.role === 'user' ? '🧑 You' : '🤖 asXai'}:</strong>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
+                <img
+                  src={msg.role === 'user' ? "/asXai_user_black_icon.svg" : "/asXai_robot_black_icon.svg"}
+                  alt={msg.role === 'user' ? "User" : "asXai"}
+                  style={{
+                    height: '2em',
+                    verticalAlign: 'middle'
+                  }}
+                />
+              </strong>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -942,7 +985,8 @@ export default function ChatApp() {
               borderRadius: '4px',
               fontSize: '1.1rem',
               height: 'fit-content',
-              alignSelf: 'flex-end'
+              alignSelf: 'flex-end',
+              fontFamily: 'var(--main-font)',
             }}
           >
             Send
@@ -1003,8 +1047,9 @@ export default function ChatApp() {
             <h2 
               style={{
                 fontSize: '1.25rem',
-                fontStyle: lockArticleList ? 'italic' : 'normal',
-                fontWeight: lockArticleList ? 'normal' : 'bold',
+                fontWeight: 'bold',
+                color: lockArticleList ? 'rgb(247, 85, 239)' : 'var(--main-font-color)',
+                fontFamily: 'var(--main-font)',
                 }}>
               Top Articles
             </h2>
@@ -1013,13 +1058,27 @@ export default function ChatApp() {
               title={lockArticleList ? "Unlock articles" : "Lock articles"}
               style={{
                 border: lockArticleList ? '1px solid rgb(236, 116, 230)' : 'none',
-                background: lockArticleList ? 'rgb(243, 214, 207)' : 'none',
+                background: 'transparent',
                 cursor: 'pointer',
+                padding: 0,
+                margin: 0,
                 fontSize: '1.5rem',
-                margin: '0.1rem'
+                lineHeight: 0, 
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}
             >
-              {lockArticleList ? '🔒' : '🔓'}
+              <img
+                  src={lockArticleList ? "/lock_closed_icon.svg" : "/lock_open_icon.svg"}
+                  alt={lockArticleList ? "Article list locked" : "Article list unlocked"}
+                  style={{
+                    height: '2em', // or adjust as needed for your top bar
+                    width: '2em',
+                    display: 'block',
+                    pointerEvents: 'none', // so clicks reach the button
+                  }}
+                />
             </button>
             <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
               <label style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
@@ -1034,7 +1093,13 @@ export default function ChatApp() {
                 </label>
               </label>
             </div>
-            <div style={{ display: 'flex', marginRight: '1%', gap: '0rem'}}>
+            <div style={{ 
+              display: 'flex', 
+              marginRight: '1%', 
+              gap: '0rem',
+              color: lockArticleList ? 'rgb(247, 85, 239)' : 'var(--main-font-color)',
+              fontFamily: 'var(--main-font)',
+              }}>
               <label htmlFor="topK">TopK:</label>
               <input
                 type="range"
