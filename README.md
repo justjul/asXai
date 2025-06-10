@@ -5,6 +5,11 @@
 
 ---
 
+## 📚 Demo
+Try the live version (if deployed):
+👉 asXai Live Demo
+🔐 Auth required via Firebase (email/password)
+
 ## 💡Features
 
 - **Retrieval-Augmented Generation** using LLMs grounded in live academic sources
@@ -54,7 +59,7 @@ git clone https://github.com/yourusername/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
 docker-compose --env-file .env.compose up -d
-
+```
 ---
 
 ## 🚀 Start service
@@ -62,3 +67,8 @@ docker-compose --env-file .env.compose up -d
 ```bash
 cd asXai/docker
 docker-compose --env-file .env.compose up -d
+```
+
+## 🤝 Contributing
+Pull requests and issues are welcome!
+If you use this pipeline in research, please consider citing or starring the repository.
