@@ -1,6 +1,4 @@
 # Byte-compiled / optimized / DLL files
-notebooks/config.py
-config.py
 __pycache__/
 *.py[cod]
 *$py.class
