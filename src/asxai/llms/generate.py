@@ -13,6 +13,8 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
+from .mcp_library import QueryParseMCP
+
 from tqdm import tqdm
 from asxai.utils import load_params
 from asxai.utils import running_inside_docker
@@ -46,15 +48,17 @@ def extract_parsed_fields(text: str):
                 return False
 
         norm_dic = {'query': next((val for key, val in dic.items() if 'query' in key and val != 'null'), None),
-                    'authorName': next((val for key, val in dic.items() if 'name' in key and val != 'null'), None),
+                    'cleaned_query': next((val for key, val in dic.items() if 'cleaned' in key and val != 'null'), None),
+                    'authorName': next((val for key, val in dic.items() if 'author' in key and val != 'null'), None),
                     'publicationDate_start': next(
                         (parse(val, default=default).strftime("%Y-%m-%d")
-                         for key, val in dic.items() if 'start_date' in key and safe(val)), None),
+                         for key, val in dic.items() if 'start' in key and safe(val)), None),
                     'publicationDate_end': next(
                         (parse(val, default=default).strftime("%Y-%m-%d")
-                         for key, val in dic.items() if 'end_date' in key and safe(val)), None)}
+                         for key, val in dic.items() if 'end' in key and safe(val)), None)}
         return norm_dic
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.warning(f"JSON decoding error: {e}")
         return {}
 
 
@@ -152,10 +156,16 @@ class OllamaManager:
     async def parse(self, query: str,
                     parse_instruct: str = ollama_config['parse_instruct'],
                     **kwargs):
-        message = {'role': 'user', 'content': f"{parse_instruct} {query}"}
+
+        instruct = QueryParseMCP.generate_prompt(parse_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        message = {'role': 'user', 'content': prompt}
         async with self.semaphore:
             response = await self.generate(messages=[message], options={'temperature': 0.0})
+
         result = extract_parsed_fields(response)
+        logger.info(f"Parsed query: {result}")
         result['original_query'] = query
         return result
 

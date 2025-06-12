@@ -8,7 +8,7 @@ import hashlib
 
 import config
 from asxai.vectorDB import QdrantManager
-from asxai.vectorDB import PaperEmbed, RerankEncoder, OllamaManager
+from asxai.vectorDB import PaperEmbed, RerankEncoder
 import torch
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -25,7 +25,6 @@ params = load_params()
 search_config = params["search"]
 
 async_runner = AsyncRunner()
-ollama_manager = OllamaManager()
 embedEngine = PaperEmbed(model_name=config.MODEL_EMBED)
 qdrant = QdrantManager()
 rerankEngine = RerankEncoder.load()
@@ -108,8 +107,6 @@ class BlendScorer:
 
 def run_search_worker():
     logger.info("Search worker ready")
-
-    async_runner.run(ollama_manager.is_model_pulled())
 
     while True:
         payloads = []

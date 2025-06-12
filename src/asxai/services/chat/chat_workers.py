@@ -10,7 +10,7 @@ import hashlib
 import requests
 
 import config
-from asxai.vectorDB import OllamaManager
+from asxai.llms import OllamaManager
 import torch
 import numpy as np
 import re
@@ -77,8 +77,10 @@ async def ollama_chat(payload, ollama_manager):
 
     parse_instruct = chat_config["instruct_parse"]
     parsed_user_message = await ollama_manager.parse(user_message, parse_instruct=parse_instruct)
-    user_message_cleaned = parsed_user_message.pop('query')
+    user_message_cleaned = parsed_user_message.get(
+        'cleaned_query') or parsed_user_message.get('query') or None
     payload_filters = parsed_user_message
+    print(payload_filters)
 
     # Load existing context from disk (if any).
     context = load_chat_context(task_id=task_id)
@@ -157,6 +159,8 @@ async def ollama_chat(payload, ollama_manager):
 
             if done == False:
                 if search_query:
+                    print({'query': search_query,
+                           **payload_filters, })
                     submit_search(user_id=user_id,
                                   notebook_id=notebook_id,
                                   query_id=query_id,
