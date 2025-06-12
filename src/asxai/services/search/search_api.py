@@ -173,7 +173,7 @@ class QueryRequest(BaseModel):
     user_id: str
     notebook_id: str
     query_id: str
-    query: str
+    query: dict
     topK: int = search_config["topk_rerank"]
     paperLock: bool = False
 
@@ -203,27 +203,6 @@ async def get_latest_result(task_id: str):
         raise HTTPException(
             status_code=404, detail=f"No result found for {task_id}")
     return {"task_id": task_id, "notebook": result}
-
-
-@app.get("/search/{user_id}")
-async def get_user_notebooks(user_id: str):
-    notebooks = list_notebooks(user_id)
-    return {"user_id": user_id, "notebook_list": notebooks}
-
-
-@app.get("/search/{user_id}/{notebook_id}")
-async def get_notebook_result(user_id: str, notebook_id: str):
-    task_id = make_task_id(user_id, notebook_id)
-    result = get_result(task_id)
-    if result is None:
-        raise HTTPException(
-            status_code=404, detail="No result found for this notebook")
-    return {"task_id": task_id, "notebook": result}
-
-
-@app.get("/search/task_id")
-def generate_task_id(user_id: str, notebook_id: str):
-    return {"task_id": make_task_id(user_id, notebook_id)}
 
 
 @app.get("/metrics")

@@ -75,6 +75,11 @@ async def ollama_chat(payload, ollama_manager):
     paperLock = payload["paperLock"]
     model_name = ollama_manager.resolve_model(model_name)
 
+    parse_instruct = chat_config["instruct_parse"]
+    parsed_user_message = await ollama_manager.parse(user_message, parse_instruct=parse_instruct)
+    user_message_cleaned = parsed_user_message.pop('query')
+    payload_filters = parsed_user_message
+
     # Load existing context from disk (if any).
     context = load_chat_context(task_id=task_id)
 
@@ -82,7 +87,7 @@ async def ollama_chat(payload, ollama_manager):
     if not context:
         prompt = (
             f"Summarize the following user request in exactly three words. "
-            f"Do not return anything else:\n\n\"{user_message}\""
+            f"Do not return anything else:\n\n\"{user_message_cleaned}\""
         )
         notebook_title = await ollama_manager.generate(
             model=model_name,
@@ -94,7 +99,7 @@ async def ollama_chat(payload, ollama_manager):
         notebook_title = context[-1].get('notebook_title', user_message)
 
     messages = context + \
-        [{"role": "user", "content": user_message + instruct_init}]
+        [{"role": "user", "content": user_message_cleaned + instruct_init}]
 
     try:
         done = False
@@ -136,9 +141,9 @@ async def ollama_chat(payload, ollama_manager):
                 if not done and "SEARCHING" in full_response:
                     done = False
                     final_msg = "\n<SEARCHING>\n"
-                    response_parsed = full_response.split("SEARCHING:", 1)
-                    search_query = response_parsed[-1].strip()
+                    response_parsed = full_response.split("SEARCHING:")
                     if len(response_parsed) > 1:
+                        search_query = ' '.join(response_parsed[1:]).strip()
                         full_response = response_parsed[0].strip()
                     else:
                         full_response = ""
@@ -155,7 +160,8 @@ async def ollama_chat(payload, ollama_manager):
                     submit_search(user_id=user_id,
                                   notebook_id=notebook_id,
                                   query_id=query_id,
-                                  query=search_query,
+                                  query={'query': search_query,
+                                         **payload_filters, },
                                   topK=topK,
                                   paperLock=paperLock)
                     search_context, papers = load_search_result(task_id=task_id,

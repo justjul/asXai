@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./front/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />
+  <img src="./src/front/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />
 </div>
 
 **asXai** is an open-source, containerized RAG pipeline (Retrieval-Augmented Generation) designed for scientific questions. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
@@ -23,7 +23,7 @@
 
 ### 🌐 Online Services
 
-- `frontend/`: Vite + React UI with Firebase Auth
+- `front/`: Vite + React UI with Firebase Auth
 - `chat-api/`: FastAPI endpoint that manages conversation flow and SSE
 - `chat-worker/`: Handles LLM responses and calls to search-worker to integrate citations
 - `search-api/`: API to dispatch search queries to workers
@@ -59,6 +59,8 @@ cp .env.compose.example .env.compose
 ```bash
 pip install -e .[torch,nlp,api,pdf,dev]
 ```
+
+- Depedencies: Docker, Ollama
 
 
 ## 🚀 Start service

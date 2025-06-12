@@ -73,6 +73,18 @@ chat:
             Question: <QUERY> \n
             Context:\n
             <REFS>
+  instruct_parse: > 
+            You are a helpful assistant that parse queries and only return the requested fields.\n
+            Parse the following search query to extract the cleaned query and any metadata it contains.
+            Specifically, identify and separate:\n
+            - author last names\n
+            - Date to start searching from (formatted as %Y-%m-%d even if there's just a year mentioned)\n
+            - Date to stop searching at (formatted as %Y-%m-%d even if there's just a year mentioned)\n
+            Then reformulate the query without sections specifying authors names or dates.\n
+            Return results as a dictionary with cleaned query and fields:\n
+            {\"cleaned_query\" \"author_names\", \"start_date\", \"end_date\"}\n\n
+            If you can't find answers for any of these fields just fill it with 'null'.\n
+            Here is the original query:\n
   instruct_init: >
             \nImportant instructions:\n
             * **If you can answer the user's question accurately based on your knowledge and previous messages in the conversation**:\n

@@ -129,7 +129,7 @@ def run_search_worker():
 
 async def batch_and_save(raw_payloads):
     print(raw_payloads)
-    queries = [pl["query"] for pl in raw_payloads]
+    parsed_queries = {pl["task_id"]: pl["query"] for pl in raw_payloads}
     task_ids = [pl["task_id"] for pl in raw_payloads]
     query_ids = {pl["task_id"]: pl["query_id"]
                  for pl in raw_payloads}
@@ -138,62 +138,21 @@ async def batch_and_save(raw_payloads):
     paperLocks = {pl["task_id"]: pl["paperLock"]
                   for pl in raw_payloads}
 
-    USE_CACHE = search_config['use_query_cache']
-
-    existing_results = {}
-    parsed_queries = {}
-    saved_query_embeds = {}
-    queries_to_expand, qids_to_expand = [], []
-    for i, qid in enumerate(task_ids):
-        mark_as_inprogress(qid)
-
-        if (USE_CACHE
-            and existing_results[qid]
-                and existing_results[qid].get("query_id") == query_ids[qid]):
-            parsed_query = existing_results[qid].get("parsed_query", {})
-            if parsed_query:
-                parsed_queries[qid] = parsed_query
-            query_emb = existing_results[qid].get("query_embedding", [])
-            if query_emb:
-                saved_query_embeds[qid] = torch.tensor(query_emb)
-        else:
-            queries_to_expand.append(queries[i])
-            qids_to_expand.append(qid)
-
-    new_parsed_queries = await ollama_manager.expand_parse_batch(queries=queries_to_expand,
-                                                                 query_ids=qids_to_expand,
-                                                                 options={'temperature': 0.5})
-    parsed_queries.update(new_parsed_queries)
-
-    try:
-        new_expanded_queries = [new_parsed_queries[qid].get('query', queries_to_expand[i])
-                                for i, qid in enumerate(qids_to_expand)]
-    except Exception as e:
-        print(new_parsed_queries.keys())
-        print(qids_to_expand)
-        raise
-
-    if new_expanded_queries:
-        new_embeds = embedEngine.embed_queries(new_expanded_queries)
-    else:
-        new_embeds = []
-
-    new_query_embeds = {qid: emb for qid,
-                        emb in zip(qids_to_expand, new_embeds)}
-    query_embeds = [new_query_embeds[qid] if qid in new_query_embeds else saved_query_embeds[qid]
-                    for qid in task_ids]
-    query_embeds = torch.stack(query_embeds)
+    expanded_queries = [parsed_queries[qid].get('query')
+                        for i, qid in enumerate(task_ids)]
+    query_embeds = embedEngine.embed_queries(expanded_queries)
 
     meta_filters = []
+    existing_results = {}
     for qid in task_ids:
         meta_filters.append([])
-        if parsed_queries[qid]['authorName']:
+        if parsed_queries[qid].get('authorName', None):
             meta_filters[-1].append(['authorName',
                                     '==', parsed_queries[qid]['authorName']])
-        if parsed_queries[qid]['publicationDate_start']:
+        if parsed_queries[qid].get('publicationDate_start', None):
             meta_filters[-1].append(['publicationDate', 'gte',
                                     parsed_queries[qid]['publicationDate_start']])
-        if parsed_queries[qid]['publicationDate_end']:
+        if parsed_queries[qid].get('publicationDate_end', None):
             meta_filters[-1].append(['publicationDate', 'lte',
                                     parsed_queries[qid]['publicationDate_end']])
         if paperLocks[qid]:
@@ -227,8 +186,6 @@ async def batch_and_save(raw_payloads):
             "No valid task_ids remaining after filtering empty Qdrant results. Exiting.")
         return
 
-    queries = [queries[i] for i, qid in enumerate(task_ids)
-               if qid not in empty_ids]
     query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(task_ids)
                                 if qid not in empty_ids])
     raw_payloads = [raw_payloads[i] for i, qid in enumerate(task_ids)

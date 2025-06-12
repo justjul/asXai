@@ -870,43 +870,47 @@ def batch_full_Clean(extracted_dir: str,
                      push_to_vectorDB: Optional[bool] = False):
     ids_to_save = []
     while True:
-        new_ids = collect_extracted_ids(extracted_dir)
-        if not new_ids:
-            if extraction_year_done(extracted_dir):
-                break
-            else:
-                time.sleep(5)
-                continue
+        try:
+            new_ids = collect_extracted_ids(extracted_dir)
+            if not new_ids:
+                if extraction_year_done(extracted_dir):
+                    break
+                else:
+                    time.sleep(5)
+                    continue
 
-        extracted_pdfs = collect_extracted_PDFs(extracted_dir, new_ids)
+            extracted_pdfs = collect_extracted_PDFs(extracted_dir, new_ids)
 
-        clean_pool = multiprocessing.Pool(processes=n_jobs)
-        clean_async = [clean_pool.apply_async(clean_full_text, (pdf, extract_ref))
-                       for pdf in extracted_pdfs]
-        final_results = [task.get() for task in clean_async]
+            clean_pool = multiprocessing.Pool(processes=n_jobs)
+            clean_async = [clean_pool.apply_async(clean_full_text, (pdf, extract_ref))
+                           for pdf in extracted_pdfs]
+            final_results = [task.get() for task in clean_async]
 
-        if final_results:
-            pdfdata = pd.DataFrame(
-                [pdf for pdf in final_results])
+            if final_results:
+                pdfdata = pd.DataFrame(
+                    [pdf for pdf in final_results])
 
-            ids_to_save.extend(pdfdata["paperId"])
+                ids_to_save.extend(pdfdata["paperId"])
 
-            paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
-                paperdata["text"].set_index("paperId")).reset_index(drop=False))
+                paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
+                    paperdata["text"].set_index("paperId")).reset_index(drop=False))
 
-            paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
+                paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
 
-        if len(ids_to_save) > 64:
-            extracted_to_text(paperdata["text"], year)
+            if len(ids_to_save) > 64:
+                extracted_to_text(paperdata["text"], year)
 
-            if push_to_vectorDB:
-                DBmask = paperdata['text']["paperId"].isin(
-                    ids_to_save)
-                text_to_DB = paperdata['text'].loc[DBmask]
-                metadata_to_DB = paperdata['metadata'].loc[DBmask]
-                extracted_to_DB(text_to_DB, metadata_to_DB)
+                if push_to_vectorDB:
+                    DBmask = paperdata['text']["paperId"].isin(
+                        ids_to_save)
+                    text_to_DB = paperdata['text'].loc[DBmask]
+                    metadata_to_DB = paperdata['metadata'].loc[DBmask]
+                    extracted_to_DB(text_to_DB, metadata_to_DB)
 
-            ids_to_save = []
+                ids_to_save = []
+        except Exception as e:
+            logger.warning(f"Clean up of extracted PDFs failed: {e}")
+            pass
 
     if len(ids_to_save) > 0:
         extracted_to_text(paperdata["text"], year)
