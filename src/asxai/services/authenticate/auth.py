@@ -52,7 +52,8 @@ def set_admin_claim(target_uids: List[str] | None = None):
             firebase_auth.set_custom_user_claims(uid, new_claims)
             logger.info(f"admin rights set for user {uid}")
     except Exception as e:
-        raise logger.error(f"Failed to set admin claim for {target_uids}: {e}")
+        logger.error(
+            f"Failed to set admin claim for {target_uids}: {e}. You probably need to authenticate first")
 
 
 def revoke_admin_claim(target_uids: list[str] | None = None):

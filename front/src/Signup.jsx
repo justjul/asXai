@@ -39,8 +39,7 @@ export default function Signup() {
     }
     try {
         await signUp(email, password);
-        await writeIdTokenCookie();
-        navigate('/n');
+        navigate('/');
     } catch (err) {
         alert("Signup failed. Try again or use a different email.");
     }

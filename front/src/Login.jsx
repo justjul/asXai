@@ -47,9 +47,18 @@ export default function Login() {
       if (!currentUser) {
         throw new Error("Firebase user not available immediately after signIn");
       }
+
+      if (!currentUser.emailVerified) {
+        alert("Please verify your email before logging in. Check your inbox.");
+        await firebaseSignOut(auth); // sign them out if email is not verified
+        return;
+      }
+      
       await writeIdTokenCookie();
-      ////Navigate to the /n to get a new notebookId from ChatApp
+
+      //Navigate to the /n to get a new notebookId from ChatApp
       navigate(`/n`);
+
     } catch (err) {
       console.error("Login failed:", err);
       alert("Login failed. Check credentials or sign up.");

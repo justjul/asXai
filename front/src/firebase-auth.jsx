@@ -4,7 +4,8 @@ import {
   signInWithEmailAndPassword as firebaseSignIn,
   createUserWithEmailAndPassword as firebaseSignUp,
   onAuthStateChanged,
-  signOut as firebaseSignOut
+  signOut as firebaseSignOut,
+  sendEmailVerification  
 } from 'firebase/auth';
 import { createContext, useContext, useEffect, useState } from 'react';
 
@@ -31,13 +32,24 @@ export function AuthProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  // ✅ Custom sign up
-  const signUp = (email, password) => firebaseSignUp(auth, email, password);
+  // sign up
+  const signUp = async (email, password) => {
+    const userCredential = await firebaseSignUp(auth, email, password);
+    await sendEmailVerification(userCredential.user);
+    await firebaseSignOut(auth);
+    return userCredential;
+  };
 
-  // ✅ Custom sign in
-  const signIn = (email, password) => firebaseSignIn(auth, email, password);
+  // sign in
+  const signIn = async (email, password) => {
+    const userCredential = await firebaseSignIn(auth, email, password);
+    if (!userCredential.user.emailVerified) {
+      await sendEmailVerification(userCredential.user);
+    }
+    return userCredential;
+  };
 
-  // ✅ Custom sign out
+  // sign out
   const logout = () => firebaseSignOut(auth);
 
   return (
