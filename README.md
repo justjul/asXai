@@ -51,7 +51,7 @@
 
 - Using Docker compose:
 ```bash
-git clone https://github.com/yourusername/asXai.git
+git clone https://github.com/justjul/asXai.git
 cd asXai/docker
 cp .env.compose.example .env.compose
 ```
