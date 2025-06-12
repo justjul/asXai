@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./src/front/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />
+  <img src="./front/public/asXai_logo_black.svg" alt="asXai Logo" width="200" />
 </div>
 
 **asXai** is an open-source, containerized RAG pipeline (Retrieval-Augmented Generation) designed for scientific questions. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
