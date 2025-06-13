@@ -7,13 +7,13 @@ import requests
 
 from typing import List, Tuple, Union, TypedDict, AsyncGenerator
 from pathlib import Path
-import json
 import uuid
 import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP
+from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP, GenerationPlannerMCP
+from .mcp_library import parse_mcp_response
 
 from tqdm import tqdm
 from asxai.utils import load_params
@@ -27,39 +27,7 @@ params = load_params()
 embedding_config = params["embedding"]
 qdrant_config = params["qdrant"]
 ollama_config = params["ollama"]
-
-
-def extract_parsed_fields(text: str):
-    try:
-        start = text.index('{')
-        end = text.rindex('}') + 1
-        json_block = text[start:end]
-        print(json_block)
-        json_block = json_block.replace("None", "null")
-        dic = json.loads(json_block)
-        print(dic)
-        default = datetime(1, 1, 1)  # defaults everything to Jan 1
-
-        def safe(val):
-            try:
-                parse(val, default=default).strftime("%Y-%m-%d")
-                return True
-            except Exception:
-                return False
-
-        norm_dic = {'query': next((val for key, val in dic.items() if 'query' in key and val != 'null'), None),
-                    'cleaned_query': next((val for key, val in dic.items() if 'cleaned' in key and val != 'null'), None),
-                    'authorName': next((val for key, val in dic.items() if 'author' in key and val != 'null'), None),
-                    'publicationDate_start': next(
-                        (parse(val, default=default).strftime("%Y-%m-%d")
-                         for key, val in dic.items() if 'start' in key and safe(val)), None),
-                    'publicationDate_end': next(
-                        (parse(val, default=default).strftime("%Y-%m-%d")
-                         for key, val in dic.items() if 'end' in key and safe(val)), None)}
-        return norm_dic
-    except (ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"JSON decoding error: {e}")
-        return {}
+chat_config = params["chat"]
 
 
 class OllamaManager:
@@ -136,7 +104,6 @@ class OllamaManager:
     async def generate(self, messages, **kwargs):
         model_name = self.resolve_model(kwargs.pop("model", "default"))
         stream = kwargs.get("stream", False)
-        print(messages)
         async with self.semaphore:
             if stream:
                 generator = await self.client.chat(model=model_name, messages=messages, **kwargs)
@@ -145,26 +112,102 @@ class OllamaManager:
                 response = await self.client.chat(model=model_name, messages=messages, **kwargs)
                 return response['message']['content']
 
-    async def expand(self, query: str,
-                     expand_instruct: str = ollama_config['expand_instruct'],
-                     **kwargs):
-        message = {'role': 'user', 'content': f"{expand_instruct} {query}"}
+    async def generatePlan(self, query: str,
+                           genplan_instruct: str = chat_config['instruct_genplan'],
+                           **kwargs):
+
+        articles_serialized = "- ARTICLES:\n"
+        query_serialized = "- QUERY:\n"
+        for turn in query:
+            if turn.get('model', '') == 'search-worker':
+                articles_serialized += f"{turn['content']}\n\n"
+            else:
+                query_serialized += turn['content']
+
+        instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
+        prompt = instruct.replace(
+            "<QUERY>", articles_serialized + query_serialized)
+
+        messages = [{'role': 'user', 'content': prompt}]
         async with self.semaphore:
-            response = await self.generate(messages=[message], **kwargs)
+            response = await self.generate(messages=messages, **kwargs)
+
+        print(response)
+        result = parse_mcp_response(response)
+
+        return result
+
+    async def generate_title(self, query: str,
+                             title_instruct: str = chat_config['instruct_title'],
+                             **kwargs):
+        instruct = NotebookTitleMCP.generate_prompt(title_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        messages = [{'role': 'user', 'content': prompt}]
+        async with self.semaphore:
+            response = await self.generate(messages=messages, **kwargs)
+
+        result = parse_mcp_response(response)
+
+        return result
+
+    async def chatSummarize(self, chat_history: list[dict],
+                            chatSummary_instruct:  str = chat_config['instruct_chatSummary'],
+                            summary_len: int = chat_config['summary_length']):
+        instruct = ChatSummarizerMCP.generate_prompt(chatSummary_instruct)
+        instruct = instruct.replace("<SUMMARY_LENGTH>", str(summary_len))
+
+        summaries_serialized = "- PREVIOUS SUMMARIES:\n"
+        chat_serialized = "- RECENT HISTORY:\n"
+        for turn in chat_history:
+            if turn['model'] != 'search-worker':
+                if turn['model'] != 'summarizer':
+                    role = turn['role'].capitalize()
+                    content = turn['content']
+                    chat_serialized += f"    + {role}: {content}\n"
+                else:
+                    content = turn['content']
+                    summaries_serialized += f"    + {content}\n"
+
+        prompt = instruct.replace(
+            "<HISTORY>", summaries_serialized + chat_serialized)
+
+        messages = [{'role': 'user', 'content': prompt}]
+        async with self.semaphore:
+            response = await self.generate(messages=messages, options={'temperature': 0.0})
+        print(f"SUMMARIZER OUTPUT: {response}")
+        # result = parse_mcp_response(response)
+
         return response
 
+    async def expand(self, query: str, chat_history: List[dict],
+                     expand_instruct: str = chat_config['instruct_expand'],
+                     **kwargs):
+        instruct = ExpandQueryMCP.generate_prompt(expand_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        context = [{'role': msg['role'], 'content': msg['content']}
+                   for msg in chat_history]
+        messages = context + [{'role': 'user', 'content': prompt}]
+        async with self.semaphore:
+            response = await self.generate(messages=messages, **kwargs)
+
+        result = parse_mcp_response(response)
+
+        return result
+
     async def parse(self, query: str,
-                    parse_instruct: str = ollama_config['parse_instruct'],
+                    parse_instruct: str = chat_config['instruct_parse'],
                     **kwargs):
 
         instruct = QueryParseMCP.generate_prompt(parse_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
-        message = {'role': 'user', 'content': prompt}
+        messages = [{'role': 'user', 'content': prompt}]
         async with self.semaphore:
-            response = await self.generate(messages=[message], options={'temperature': 0.0})
+            response = await self.generate(messages=messages, options={'temperature': 0.0})
 
-        result = extract_parsed_fields(response)
+        result = parse_mcp_response(response)
         logger.info(f"Parsed query: {result}")
         result['original_query'] = query
         return result

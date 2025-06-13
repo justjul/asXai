@@ -66,22 +66,64 @@ chat:
     - http://localhost:5173
     - https://goose-beloved-kit.ngrok-free.app #frontend tunnel
 
-  synth_instruct: >
-            You are a helpful academic assistant.\n
-            Answer the following question using the articles provided as context.\n
-            If you can't find the answer, do not pretend you know it, but answer "I don't know".\n
-            Question: <QUERY> \n
-            Context:\n
-            <REFS>
+  min_history_length: 1000
+  summary_length: 100
+
+  instruct_chatSummary: >
+            You are a scientific assistant summarizing conversations.\n
+            You are given a conversation recent history between a user and an assistant with summaries of older turns.\n
+            Your task is to extract and summarize the key topics discussed in the recent history in <SUMMARY_LENGTH> words.\n
+            Output format:
+            <FIELDS>\n\n
+            Output strictly valid JSON.\n
+            Here is the conversation history with previous summaries:\n
+            <HISTORY>
+  instruct_title: > 
+            You are a scientific assistant that generates short notebook titles.\n
+            Given a user query, produce a short, clear, high-level title.\n
+            Output format:
+            <FIELDS>\n\n
+            Output strictly valid JSON.\n
+            Here is the original user's query:\n
+            <QUERY>
   instruct_parse: > 
             You are a a scientific query parser that parse queries and only return the requested fields as valid JSON.\n
-            Parse the following search query to extract the cleaned query and the metadata it may contain.
+            Parse the following search query to extract the cleaned query and the metadata it may contain.\n
             Specifically, identify and separate:\n
-            <FIELDS>
-            If you can't find answers for any of these fields just fill it with 'null'.\n
+            <FIELDS>\n\n
+            If you can't find answers for a field just fill it with 'null'.\n
             Output strictly valid JSON.\n
             Here is the original query:\n
-            <QUERY>"""
+            <QUERY>
+  instruct_expand: >
+            You are a scientific query planner and expansion agent.\n
+            Given the full conversation context and the user request, you must extract a search expansion plan.\n
+            Your output must fill the following fields:\n
+            <FIELDS>\n\n
+            If you can't find answers for a field just fill it with 'null'.\n
+            Output strictly valid JSON.\n
+            Here is the original query:\n
+            <QUERY>
+  instruct_genplan: >
+            You are a generation planner for scientific answering.\n
+            You receive:\n
+            - The user's query.\n
+            - A list of articles retrieved, each with their articleId, title and author's names.\n
+
+            Your task is to:\n
+              1- Break the answer into multiple sections.\n
+              2- Assign relevant paperIds for each section based on their content.\n
+
+            Output format:\n
+            <FIELDS>\n\n
+
+            Limit to 3-6 sections. Each section must include at least one relevant paperId.\n
+            Output strictly valid JSON.\n
+            Here below is the list of articles with the query at the end:\n
+            <QUERY>
+
+            
+
   # instruct_parse: > 
   #           You are a helpful assistant that parse queries and only return the requested fields.\n
   #           Parse the following search query to extract the cleaned query and any metadata it contains.
@@ -97,18 +139,17 @@ chat:
   instruct_init: >
             \nImportant instructions:\n
             * **If you can answer the user's question accurately based on your knowledge and previous messages in the conversation**:\n
-              answer it direclty and if you used previous messages, cite your source by including (id) where id are the ARTICLE IDs from the database \n
-              but DO NOT include external references. \
-            * **If your answer needs to be cross-checked for accuracy**:\n
-              Step 1: Define at least three questions that covers different aspects of the user's query./n
-              Step 2: Expand each of these questions by rephrasing them in a more descriptive and complete sentence, \n
+              answer it direclty and cite your source by including (<ARTICLE_ID>) where ARTICLE_ID is the hashed id of an article already cited in the previous context of the conversation\n
+              DO NOT include external references. DO NOT make up references\n
+            * **If to answer you need additional articles relevant to the user's question**:\n
+              Step 1: Expand the user's questions by rephrasing it in a more descriptive and complete sentence, \n
               suitable for retrieving relevant scientific documents. Make complete sentences not just key words. \n
-              Step 3: At the end, return the questions defined at step 2, as: \n
-              'SEARCHING: question1 \n\n' 'SEARCHING: question2 \n\n' etc.
+              Step 2: At the end, return the question defined at step 1, as: \n
+              '\n\nSEARCHING: {question} \n\n'.
   instruct_refine: >
             * Provide an accurate answer to the user's question based on the provided articles and on your knowledge.\n
             * Structure your response in multiple paragraph describing one element of the response.
-              Cite your sources by including where appropriate (ARTICLE_ID) where ARTICLE_ID are the hashed ids provided in the context\n
+              Cite your sources by including where appropriate (<ARTICLE_ID>) where ARTICLE_ID are the hashed ids provided in the context\n
               for each article.\n
 
 download:

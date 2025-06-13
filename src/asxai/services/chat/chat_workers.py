@@ -75,33 +75,50 @@ async def ollama_chat(payload, ollama_manager):
     paperLock = payload["paperLock"]
     model_name = ollama_manager.resolve_model(model_name)
 
-    parse_instruct = chat_config["instruct_parse"]
-    parsed_user_message = await ollama_manager.parse(user_message, parse_instruct=parse_instruct)
-    user_message_cleaned = parsed_user_message.get(
-        'cleaned_query') or parsed_user_message.get('query') or None
-    payload_filters = parsed_user_message
-    print(payload_filters)
-
     # Load existing context from disk (if any).
-    context = load_chat_context(task_id=task_id)
+    history = load_chat_history(task_id=task_id)
+    summaries = load_chat_summaries(task_id=task_id)
+
+    if summaries:
+        last_summary_date = summaries[-1].get("timestamp", 0)
+        recent_history = [
+            turns for turns in history if turns["timestamp"] > last_summary_date]
+        context = summaries + recent_history
+    else:
+        context = history
+        recent_history = history
+
+    # Updating chat summaries if needed
+    assist_words = [len(turn['content'].split(
+        ' ')) for turn in recent_history if turn['role'] == 'assistant' and turn['role'] != 'summarizer']
+    assist_words = list(reversed(assist_words))
+    assist_cumsum = np.cumsum(assist_words).tolist() or [0]
+    print(f"NUMBER OF ASSISTANT WORDS SO FAR: {assist_cumsum[-1]}")
+    if assist_cumsum[-1] > 2*chat_config['min_history_length']:
+        turn_idx_end = next((i for i, n in enumerate(
+            assist_cumsum) if n > chat_config['min_history_length']), None)
+        if turn_idx_end is not None:
+            history_to_summarize = recent_history[:-turn_idx_end]
+            summary = await ollama_manager.chatSummarize(chat_history=summaries + history_to_summarize)
+            chat_summary = {"role": "assistant", "content": summary,
+                            "task_id": task_id, "timestamp": history_to_summarize[-1]["timestamp"],
+                            "user_id": user_id, "notebook_id": notebook_id,
+                            "query_id": query_id, "model": "summarizer"}
+            save_chat_summary(task_id, [chat_summary])
 
     instruct_init = chat_config["instruct_init"]
+
     if not context:
-        prompt = (
-            f"Summarize the following user request in exactly three words. "
-            f"Do not return anything else:\n\n\"{user_message_cleaned}\""
-        )
-        notebook_title = await ollama_manager.generate(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            options={"temperature": 0.0},  # deterministic
-        )
+        title_response = await ollama_manager.generate_title(query=user_message)
+        notebook_title = title_response['title']
     else:
         notebook_title = context[-1].get('notebook_title', user_message)
 
+    expanded_query = await ollama_manager.expand(query=user_message,
+                                                 chat_history=context)
+
     messages = context + \
-        [{"role": "user", "content": user_message_cleaned + instruct_init}]
+        [{"role": "user", "content": user_message + instruct_init}]
 
     try:
         done = False
@@ -140,15 +157,16 @@ async def ollama_chat(payload, ollama_manager):
                 if len(buffer) > 0:
                     stream_file.write(buffer)
 
-                if not done and "SEARCHING" in full_response:
-                    done = False
+                if not done and expanded_query['search_required']:
                     final_msg = "\n<SEARCHING>\n"
-                    response_parsed = full_response.split("SEARCHING:")
-                    if len(response_parsed) > 1:
-                        search_query = ' '.join(response_parsed[1:]).strip()
-                        full_response = response_parsed[0].strip()
-                    else:
-                        full_response = ""
+                    search_query = expanded_query['query']
+
+                    # response_parsed = full_response.split("SEARCHING:")
+                    # if len(response_parsed) > 1:
+                    #     search_query = ' '.join(response_parsed[1:]).strip()
+                    #     full_response = response_parsed[0].strip()
+                    # else:
+                    #     full_response = ""
                 else:
                     done = True
                     final_msg = "\n<END_OF_MESSAGE>\n"
@@ -159,12 +177,15 @@ async def ollama_chat(payload, ollama_manager):
 
             if done == False:
                 if search_query:
-                    print({'query': search_query,
-                           **payload_filters, })
+                    parsed_search_query = await ollama_manager.parse(search_query)
+                    search_query_cleaned = parsed_search_query.get(
+                        'cleaned_query') or parsed_search_query.get('query') or None
+                    payload_filters = parsed_search_query
+
                     submit_search(user_id=user_id,
                                   notebook_id=notebook_id,
                                   query_id=query_id,
-                                  query={'query': search_query,
+                                  query={'query': search_query_cleaned,
                                          **payload_filters, },
                                   topK=topK,
                                   paperLock=paperLock)
@@ -174,9 +195,13 @@ async def ollama_chat(payload, ollama_manager):
                                                                 query_id=query_id,
                                                                 topK=topK)
 
+                    expanded_query['search_required'] = False
+
                 instruct_refine = chat_config["instruct_refine"]
                 messages = context + search_context + \
                     [{"role": "user", "content": user_message + instruct_refine}]
+
+                generationPlan = await ollama_manager.generatePlan(query=search_context + [{"role": "user", "content": expanded_query['query']}])
 
         new_context = search_context
         new_context.extend([
@@ -193,7 +218,7 @@ async def ollama_chat(payload, ollama_manager):
                 "papers": papers, "access":  "all",
                 'notebook_title': notebook_title}
         ])
-        save_chat_context(task_id, new_context)
+        save_chat_history(task_id, new_context)
 
         logger.info(f"Streaming complete for task_id={task_id}")
 
@@ -231,7 +256,7 @@ def run_chat_worker():
     logger.info("Chat worker ready")
 
 
-def save_chat_context(task_id: str, new_data: list, append=True):
+def save_chat_history(task_id: str, new_data: list, append=True):
     users_root = config.USERS_ROOT
     full_path = os.path.join(users_root, f"{task_id}.chat.json")
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -248,7 +273,7 @@ def save_chat_context(task_id: str, new_data: list, append=True):
         json.dump(new_data, f)
 
 
-def load_chat_context(task_id: str):
+def load_chat_history(task_id: str):
     path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
     if os.path.exists(path):
         try:
@@ -256,6 +281,34 @@ def load_chat_context(task_id: str):
                 return json.load(f)
         except Exception as e:
             logger.warning(f"Failed to load chat context for {task_id}: {e}")
+    return []
+
+
+def save_chat_summary(task_id: str, new_data: list, append=True):
+    users_root = config.USERS_ROOT
+    full_path = os.path.join(users_root, f"{task_id}.summaries.json")
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+    if append and os.path.exists(full_path):
+        try:
+            with open(full_path, "r") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = []
+        new_data = existing + new_data
+
+    with open(full_path, "w") as f:
+        json.dump(new_data, f)
+
+
+def load_chat_summaries(task_id: str):
+    path = os.path.join(config.USERS_ROOT, f"{task_id}.summaries.json")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load chat summaries for {task_id}: {e}")
     return []
 
 
