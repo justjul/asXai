@@ -64,6 +64,12 @@ def kafka_poller(consumer, queue: asyncio.Queue):
             async_runner.run(queue.put(payload))
 
 
+async def stream_to_queue(streamer, queue):
+    async for chunk in streamer:
+        await queue.put(chunk)
+    await queue.put(None)
+
+
 async def ollama_chat(payload, ollama_manager):
     task_id = payload["task_id"]
     user_id = payload['user_id']
@@ -106,45 +112,108 @@ async def ollama_chat(payload, ollama_manager):
                             "query_id": query_id, "model": "summarizer"}
             save_chat_summary(task_id, [chat_summary])
 
-    instruct_init = chat_config["instruct_init"]
-
     if not context:
-        title_response = await ollama_manager.generate_title(query=user_message)
+        title_response = await ollama_manager.generateTitle(query=user_message)
         notebook_title = title_response['title']
     else:
         notebook_title = context[-1].get('notebook_title', user_message)
 
+    stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
+    startime = time.time()
+    with open(stream_path, "w") as stream_file:
+        stream_file.write("\n")
+        stream_file.write(" *Expanding* ")
+        stream_file.flush()
     expanded_query = await ollama_manager.expand(query=user_message,
                                                  chat_history=context)
+    with open(stream_path, "a") as stream_file:
+        stream_file.write(f"*{round(time.time() - startime)}s*")
+        stream_file.flush()
 
-    messages = context + \
-        [{"role": "user", "content": user_message + instruct_init}]
+    if expanded_query['search_needed']:
+        startime = time.time()
+        with open(stream_path, "a") as stream_file:
+            stream_file.write(" *Parsing* ")
+            stream_file.flush()
+        parsed_search_query = await ollama_manager.parse(expanded_query['query'])
+        search_query_cleaned = parsed_search_query.get(
+            'cleaned_query') or parsed_search_query.get('query') or None
+        payload_filters = parsed_search_query
+
+        with open(stream_path, "a") as stream_file:
+            stream_file.write(f"*{round(time.time() - startime)}s*")
+            stream_file.flush()
+
+        startime = time.time()
+        with open(stream_path, "a") as stream_file:
+            stream_file.write(" *Searching* ")
+            stream_file.flush()
+        submit_search(user_id=user_id, notebook_id=notebook_id,
+                      query_id=query_id,
+                      query={'query': search_query_cleaned,
+                             **payload_filters, },
+                      topK=topK, paperLock=paperLock)
+
+        papers = load_search_result(
+            task_id=task_id, query_id=query_id, topK=topK)
+
+        with open(stream_path, "a") as stream_file:
+            stream_file.write(f"*{round(time.time() - startime)}s*")
+            stream_file.flush()
+
+    startime = time.time()
+    with open(stream_path, "a") as stream_file:
+        stream_file.write(" *Generating Plan*")
+        stream_file.flush()
+
+    serialized_results = '\n'.join(serialize_documents(papers))
+    generationPlan = await ollama_manager.generatePlan(query=expanded_query['query'],
+                                                       documents=serialized_results)
+
+    with open(stream_path, "a") as stream_file:
+        stream_file.write(f"*{round(time.time() - startime)}s*")
+        stream_file.flush()
+
+    sections = generationPlan.get('sections', [])
+    for section in sections:
+        section_papers = [p for p in papers if p['paperId']
+                          in section.get('paperIds', [])]
+        section['documents'] = serialize_documents(section_papers)
 
     try:
-        done = False
-        keep_streaming = False
-        search_context = []
-        papers = None
-        full_response = ""
-        while not done:
-            ollama_streamer = await ollama_manager.generate(
-                model=model_name,
-                messages=messages,
+        ollama_streamers = []
+        for section in sections:
+            ollama_streamers.append(ollama_manager.generateSection(
+                title=section['title'],
+                content=section.get(
+                    'description', '') or section.get('content', ''),
+                documents=section['documents'],
                 stream=True,
-                options={'temperature': 0.5}
-            )
-            logger.info(f"Query sent to Ollama for task_id={task_id}")
+                options={'temperature': 0.0}
+            ))
 
+        # queues = [asyncio.Queue() for _ in sections]
+
+        # tasks = [
+        #     asyncio.create_task(stream_to_queue(streamer, queue))
+        #     for streamer, queue in zip(ollama_streamers, queues)
+        # ]
+
+        full_response = ""
+        # for section, queue in zip(sections, queues):
+        for section, streamer in zip(sections, ollama_streamers):
             buffer = ""
-            stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
-            if not keep_streaming:
-                with open(stream_path, "w") as stream_file:
-                    stream_file.write(f"\n")
-                    stream_file.flush()
+            # Stream this section immediately after generation
             with open(stream_path, "a") as stream_file:
-                stream_file.write("")
+                full_response += f"\n\n## {section['title']}\n\n"
+                stream_file.write(f"\n\n## {section['title']}\n\n")
                 stream_file.flush()
-                async for chunk in ollama_streamer:
+
+                async for chunk in streamer:
+                    # while True:
+                    #     chunk = await queue.get()
+                    # if chunk is None:  # Stream finished
+                    #     break
                     token = chunk["message"]["content"]
                     buffer += token
 
@@ -154,56 +223,24 @@ async def ollama_chat(payload, ollama_manager):
                         buffer = ""
                     full_response += token
 
+                # Write any remaining buffer
                 if len(buffer) > 0:
                     stream_file.write(buffer)
 
-                if not done and expanded_query['search_required']:
-                    final_msg = "\n<SEARCHING>\n"
-                    search_query = expanded_query['query']
+        # Final end signal
+        with open(stream_path, "a") as stream_file:
+            stream_file.write("\n<END_OF_MESSAGE>\n")
+            stream_file.flush()
 
-                    # response_parsed = full_response.split("SEARCHING:")
-                    # if len(response_parsed) > 1:
-                    #     search_query = ' '.join(response_parsed[1:]).strip()
-                    #     full_response = response_parsed[0].strip()
-                    # else:
-                    #     full_response = ""
-                else:
-                    done = True
-                    final_msg = "\n<END_OF_MESSAGE>\n"
-                stream_file.write(final_msg)
-                stream_file.flush()
-
-            keep_streaming = True
-
-            if done == False:
-                if search_query:
-                    parsed_search_query = await ollama_manager.parse(search_query)
-                    search_query_cleaned = parsed_search_query.get(
-                        'cleaned_query') or parsed_search_query.get('query') or None
-                    payload_filters = parsed_search_query
-
-                    submit_search(user_id=user_id,
-                                  notebook_id=notebook_id,
-                                  query_id=query_id,
-                                  query={'query': search_query_cleaned,
-                                         **payload_filters, },
-                                  topK=topK,
-                                  paperLock=paperLock)
-                    search_context, papers = load_search_result(task_id=task_id,
-                                                                user_id=user_id,
-                                                                notebook_id=notebook_id,
-                                                                query_id=query_id,
-                                                                topK=topK)
-
-                    expanded_query['search_required'] = False
-
-                instruct_refine = chat_config["instruct_refine"]
-                messages = context + search_context + \
-                    [{"role": "user", "content": user_message + instruct_refine}]
-
-                generationPlan = await ollama_manager.generatePlan(query=search_context + [{"role": "user", "content": expanded_query['query']}])
-
-        new_context = search_context
+        new_context = []
+        for paper in papers:
+            new_context.append(
+                {"role": "user", "content": serialize_documents(paper)[0],
+                 "task_id": task_id, "timestamp": time.time(),
+                 "user_id": user_id, "notebook_id": notebook_id,
+                 "query_id": query_id, "model": "search-worker",
+                 "access":  "assistant"}
+            )
         new_context.extend([
             {"role": "user", "content": user_message,
                 "task_id": task_id, "timestamp": time.time(),
@@ -218,6 +255,7 @@ async def ollama_chat(payload, ollama_manager):
                 "papers": papers, "access":  "all",
                 'notebook_title': notebook_title}
         ])
+
         save_chat_history(task_id, new_context)
 
         logger.info(f"Streaming complete for task_id={task_id}")
@@ -225,6 +263,118 @@ async def ollama_chat(payload, ollama_manager):
     except Exception as e:
         logger.error(f"Error handling chat message: {e}")
     return full_response
+
+    # messages = context + \
+    #     [{"role": "user", "content": user_message + instruct_init}]
+    # try:
+    #     done = False
+    #     keep_streaming = False
+    #     full_response = ""
+    #     while not done:
+    #         ollama_streamer = await ollama_manager.generate(
+    #             model=model_name,
+    #             messages=messages,
+    #             stream=True,
+    #             options={'temperature': 0.5}
+    #         )
+    #         logger.info(f"Query sent to Ollama for task_id={task_id}")
+
+    #         buffer = ""
+    #         stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
+    #         if not keep_streaming:
+    #             with open(stream_path, "w") as stream_file:
+    #                 stream_file.write(f"\n")
+    #                 stream_file.flush()
+    #         with open(stream_path, "a") as stream_file:
+    #             stream_file.write("")
+    #             stream_file.flush()
+    #             async for chunk in ollama_streamer:
+    #                 token = chunk["message"]["content"]
+    #                 buffer += token
+
+    #                 if len(buffer) > 100:
+    #                     stream_file.write(buffer)
+    #                     stream_file.flush()
+    #                     buffer = ""
+    #                 full_response += token
+
+    #             if len(buffer) > 0:
+    #                 stream_file.write(buffer)
+
+    #             if not done and expanded_query['search_needed']:
+    #                 final_msg = "\n<SEARCHING>\n"
+    #                 search_query = expanded_query['query']
+
+    #                 # response_parsed = full_response.split("SEARCHING:")
+    #                 # if len(response_parsed) > 1:
+    #                 #     search_query = ' '.join(response_parsed[1:]).strip()
+    #                 #     full_response = response_parsed[0].strip()
+    #                 # else:
+    #                 #     full_response = ""
+    #             else:
+    #                 done = True
+    #                 final_msg = "\n<END_OF_MESSAGE>\n"
+    #             stream_file.write(final_msg)
+    #             stream_file.flush()
+
+    #         keep_streaming = True
+
+    #         if done == False:
+    #             if search_query:
+    #                 parsed_search_query = await ollama_manager.parse(search_query)
+    #                 search_query_cleaned = parsed_search_query.get(
+    #                     'cleaned_query') or parsed_search_query.get('query') or None
+    #                 payload_filters = parsed_search_query
+
+    #                 submit_search(user_id=user_id,
+    #                               notebook_id=notebook_id,
+    #                               query_id=query_id,
+    #                               query={'query': search_query_cleaned,
+    #                                      **payload_filters, },
+    #                               topK=topK,
+    #                               paperLock=paperLock)
+    #                 papers = load_search_result(task_id=task_id,
+    #                                             query_id=query_id,
+    #                                             topK=topK)
+    #                 search_context = serialize_documents(papers)
+
+    #                 search_context = [{"role": "user", "content": formatted_ref,
+    #                                    "task_id": task_id, "timestamp": time.time(),
+    #                                    "user_id": user_id, "notebook_id": notebook_id,
+    #                                    "query_id": query_id, "model": model_name,
+    #                                    "access":  "assistant"}
+    #                                   ]
+
+    #                 expanded_query['search_required'] = False
+
+    #             instruct_refine = chat_config["instruct_refine"]
+    #             messages = context + search_context + \
+    #                 [{"role": "user", "content": user_message + instruct_refine}]
+
+    #             generationPlan = await ollama_manager.generatePlan(query=search_context + [{"role": "user", "content": expanded_query['query']}])
+
+    #     new_context = search_context
+    #     new_context.extend([
+    #         {"role": "user", "content": user_message,
+    #             "task_id": task_id, "timestamp": time.time(),
+    #             "user_id": user_id, "notebook_id": notebook_id,
+    #             "query_id": query_id, "model": model_name,
+    #             "papers": None, "access":  "all",
+    #             'notebook_title': notebook_title},
+    #         {"role": "assistant", "content": full_response,
+    #             "task_id": task_id, "timestamp": time.time(),
+    #             "user_id": user_id, "notebook_id": notebook_id,
+    #             "query_id": query_id, "model": model_name,
+    #             "papers": papers, "access":  "all",
+    #             'notebook_title': notebook_title}
+    #     ])
+    #     save_chat_history(task_id, new_context)
+
+    #     logger.info(f"Streaming complete for task_id={task_id}")
+
+    # except Exception as e:
+    #     logger.error(f"Error handling chat message: {e}")
+    # return full_response
 
 
 async def worker_loop(ollama_manager):
@@ -330,9 +480,7 @@ def submit_search(user_id: str,
     res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
 
 
-def load_search_result(user_id: str,
-                       notebook_id: str,
-                       task_id: str,
+def load_search_result(task_id: str,
                        query_id: str,
                        topK: int):
     SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
@@ -359,38 +507,41 @@ def load_search_result(user_id: str,
             except StopIteration:
                 break
 
-        model_name = 'search-worker'
-        search_context = []
-        papers = []
         for paper in results:
             if paper['openAccessPdf'].startswith("gs://"):
                 arxiv_id = paper['openAccessPdf'].rsplit("/", 1)[-1][:-4]
                 arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
                 paper['openAccessPdf'] = f"https://arxiv.org/pdf/{arxiv_id}"
-            papers.append(paper)
-            formatted_ref = ""
-            formatted_ref += f"---------\n"
-            formatted_ref += f"-  ARTICLE_ID: {paper['paperId']}\n"
-            formatted_ref += f"-  PDF URL: {paper['openAccessPdf']}\n"
-            formatted_ref += f"-  TITLE: {paper['title']}\n"
-            formatted_ref += f"-  AUTHORS: {paper['authorName']}\n"
-            formatted_ref += f"-  PUBLICATION DATE: {paper['publicationDate']}\n"
-            # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
-            formatted_ref += f"-  EXCERPT: "
-            for chunk in paper['best_chunks'][:1]:
-                formatted_ref += f"'{chunk}'\n"
-            formatted_ref += f"\n"
 
-            search_context += [{"role": "user", "content": formatted_ref,
-                                "task_id": task_id, "timestamp": time.time(),
-                                "user_id": user_id, "notebook_id": notebook_id,
-                                "query_id": query_id, "model": model_name,
-                                "access":  "assistant"}
-                               ]
     except Exception as e:
         logger.error(f"Unable to load search result for {task_id}: {e}")
 
-    return search_context, papers
+    return results
+
+
+def serialize_documents(documents: List[dict]):
+    if not isinstance(documents, list):
+        documents = [documents]
+    serialized = []
+    try:
+        for paper in documents:
+            formatted_ref = ""
+            formatted_ref += f"--- Document ---\n"
+            formatted_ref += f"Article ID: [{paper['paperId']}]\n"
+            formatted_ref += f"Title: {paper['title']}\n"
+            formatted_ref += f"Authors: {paper['authorName']}\n"
+            formatted_ref += f"Date: {paper['publicationDate']}\n"
+            # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
+            formatted_ref += f"Excerpt:\n"
+            for chunk in paper['best_chunks'][:1]:
+                formatted_ref += f"'{chunk}'\n"
+            formatted_ref += "\n"
+
+            serialized.append(formatted_ref)
+    except Exception as e:
+        logger.error(f"Unable to serialize articles: {e}")
+
+    return serialized
 
 
 def load_retrieved_context(task_id: str):

@@ -104,8 +104,8 @@ class ExpandQueryMCP(BaseModel):
         description="3-5 topics topics of research related to the user's question, returned as a list of strings.")
     key_concepts: List[str] = Field(
         description="Specific concepts, keywords, or methods relevant to the search, returned as a list of strings.")
-    search_required: str = Field(
-        description="'False' if the context of the conversation is sufficient to answer accurately the user's question, 'True' otherwise")
+    search_needed: bool = Field(
+        description="Whether additional article search is needed to answer this question (true or false)")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -118,13 +118,34 @@ class ExpandQueryMCP(BaseModel):
 
 
 class SectionPlan(BaseModel):
-    topic: str = Field(description="The topic or sub-question to answer")
+    title: str = Field(
+        description="The title or sub-question to answer in this section")
+    description: str = Field(
+        description="A short description of the topic covered in the section")
     paperIds: List[str] = Field(
         description="List of article Ids that should be used to generate this section")
 
 
 class GenerationPlannerMCP(BaseModel):
     sections: List[SectionPlan]
+
+    @classmethod
+    def generate_prompt(cls, instruct: str) -> str:
+        fields = []
+        for field_name, field_obj in cls.model_fields.items():
+            description = field_obj.description or "No description"
+            fields.append(f"- {field_name}: {description}")
+        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
+        return prompt
+
+
+class SectionGenerationMCP(BaseModel):
+    section_title: str = Field(
+        description="The title of the section being answered")
+    answer: str = Field(
+        description="The generated answer for this section, with inline citations to articles using their paperId in square brackets")
+    cited_papers: Optional[List[str]] = Field(
+        description="List of paperIds actually cited in the answer")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:

@@ -12,7 +12,7 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP, GenerationPlannerMCP
+from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP, GenerationPlannerMCP, SectionGenerationMCP
 from .mcp_library import parse_mcp_response
 
 from tqdm import tqdm
@@ -103,49 +103,65 @@ class OllamaManager:
 
     async def generate(self, messages, **kwargs):
         model_name = self.resolve_model(kwargs.pop("model", "default"))
-        stream = kwargs.get("stream", False)
+        stream = kwargs.pop("stream", False)
         async with self.semaphore:
+            # client = AsyncClient(
+            #     host=f"http://{self.host}:{self.port}", timeout=120.0)
+
             if stream:
-                generator = await self.client.chat(model=model_name, messages=messages, **kwargs)
+                generator = await self.client.chat(model=model_name, messages=messages, stream=True, **kwargs)
                 return generator
             else:
-                response = await self.client.chat(model=model_name, messages=messages, **kwargs)
+                response = await self.client.chat(model=model_name, messages=messages, stream=False, **kwargs)
                 return response['message']['content']
 
     async def generatePlan(self, query: str,
+                           documents: str,
                            genplan_instruct: str = chat_config['instruct_genplan'],
                            **kwargs):
 
-        articles_serialized = "- ARTICLES:\n"
-        query_serialized = "- QUERY:\n"
-        for turn in query:
-            if turn.get('model', '') == 'search-worker':
-                articles_serialized += f"{turn['content']}\n\n"
-            else:
-                query_serialized += turn['content']
+        articles_serialized = "- ARTICLES:\n" + documents
+        query_serialized = "- QUERY:\n" + query
 
         instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
         prompt = instruct.replace(
             "<QUERY>", articles_serialized + query_serialized)
 
         messages = [{'role': 'user', 'content': prompt}]
-        async with self.semaphore:
-            response = await self.generate(messages=messages, **kwargs)
 
-        print(response)
+        response = await self.generate(messages=messages, **kwargs)
+
         result = parse_mcp_response(response)
 
         return result
 
-    async def generate_title(self, query: str,
-                             title_instruct: str = chat_config['instruct_title'],
-                             **kwargs):
+    async def generateSection(self, title: str, content: str,
+                              documents: str,
+                              gensection_instruct: str = chat_config['instruct_gensection'],
+                              **kwargs):
+
+        instruct = SectionGenerationMCP.generate_prompt(gensection_instruct)
+        prompt = instruct.replace("<TITLE>", title)
+        prompt = instruct.replace("<CONTENT>", content)
+
+        messages = [{'role': 'user', 'content': doc} for doc in documents]
+        messages += [{'role': 'user', 'content': prompt}]
+
+        kwargs.pop("stream", None)
+        streamer = await self.generate(messages=messages, stream=True, **kwargs)
+
+        async for chunk in streamer:
+            yield chunk
+
+    async def generateTitle(self, query: str,
+                            title_instruct: str = chat_config['instruct_title'],
+                            **kwargs):
         instruct = NotebookTitleMCP.generate_prompt(title_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
         messages = [{'role': 'user', 'content': prompt}]
-        async with self.semaphore:
-            response = await self.generate(messages=messages, **kwargs)
+
+        response = await self.generate(messages=messages, **kwargs)
 
         result = parse_mcp_response(response)
 
@@ -173,8 +189,8 @@ class OllamaManager:
             "<HISTORY>", summaries_serialized + chat_serialized)
 
         messages = [{'role': 'user', 'content': prompt}]
-        async with self.semaphore:
-            response = await self.generate(messages=messages, options={'temperature': 0.0})
+
+        response = await self.generate(messages=messages, options={'temperature': 0.0})
         print(f"SUMMARIZER OUTPUT: {response}")
         # result = parse_mcp_response(response)
 
@@ -189,8 +205,8 @@ class OllamaManager:
         context = [{'role': msg['role'], 'content': msg['content']}
                    for msg in chat_history]
         messages = context + [{'role': 'user', 'content': prompt}]
-        async with self.semaphore:
-            response = await self.generate(messages=messages, **kwargs)
+
+        response = await self.generate(messages=messages, **kwargs)
 
         result = parse_mcp_response(response)
 
@@ -204,8 +220,8 @@ class OllamaManager:
         prompt = instruct.replace("<QUERY>", query)
 
         messages = [{'role': 'user', 'content': prompt}]
-        async with self.semaphore:
-            response = await self.generate(messages=messages, options={'temperature': 0.0})
+
+        response = await self.generate(messages=messages, options={'temperature': 0.0})
 
         result = parse_mcp_response(response)
         logger.info(f"Parsed query: {result}")

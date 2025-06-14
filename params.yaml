@@ -108,19 +108,41 @@ chat:
             You are a generation planner for scientific answering.\n
             You receive:\n
             - The user's query.\n
-            - A list of articles retrieved, each with their articleId, title and author's names.\n
+            - A list of articles retrieved, each with their article ID, title and author's names.\n
 
             Your task is to:\n
-              1- Break the answer into multiple sections.\n
-              2- Assign relevant paperIds for each section based on their content.\n
+              1- Break the answer into multiple sections
+              2- The first section should be an intro section
+              3- The last section should be a TLDR section.\n
+              4- For each section, generate a short description of the scope of this section.\n
+              5- Assign relevant paperIds for each section based on their content.\n
 
             Output format:\n
             <FIELDS>\n\n
 
-            Limit to 3-6 sections. Each section must include at least one relevant paperId.\n
+            Limit to 4-8 sections. Each section must include at least one relevant paperId.\n
             Output strictly valid JSON.\n
             Here below is the list of articles with the query at the end:\n
             <QUERY>
+  instruct_gensection: >
+            You are a scientific writer generating an answer for a scientific section.\n\n
+
+            You are given:\n
+            - The section title to answer.\n
+            - A short description of the scope of this section.\n
+
+            Given the list of retrieved articles provided in the context, your task is to:\n
+            - Generate a clear and factual content for this section grounded in the provided documents and your own knowledge.\n
+            - Cite your sources by including where appropriate [<ID>] where ID are the hashed article ID provided for each article.\n
+            - You must NEVER cite anything that is not in the provided article IDs.\n
+            - DO NOT generate section titles or headings — only the answer body.
+            - If no source supports a statement, avoid making it.\n
+            - If the title does not contain Introduction, DO NOT make any introductory sentence but dive right away into the specific scope of the section.\n
+
+            - Section Title: <TITLE>\n
+            - Content Description: <CONTENT>
+
+            """
 
             
 
