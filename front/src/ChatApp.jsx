@@ -30,6 +30,8 @@ export default function ChatApp() {
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [papers, setPapers] = useState([]);
+  const papersLoadingRef = useRef(false);
+  const papersRef = useRef([]);
   const [selectedQueryIds, setSelectedQueryIds] = useState(new Set());
   const [expandedIndexes, setExpandedIndexes] = useState(new Set());
   const [highlightedPaperIds, setHighlightedPaperIds] = useState(new Set());
@@ -40,7 +42,12 @@ export default function ChatApp() {
   const notebookTitle = activeNotebook ? activeNotebook.title : '';
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(true);
+  const [dropdownOpen, setDropdownOpen] = useState(null);
   const [lockArticleList, setLockArticleList] = useState(false);
+  const [editingMsg, setEditingMsg] = useState(null);
+  const [editContent, setEditContent] = useState("");
+  const [rephrasingMsg, setRephrasingMsg] = useState(null);
+  const [rephrasingContent, setRephrasingContent] = useState("");
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -129,34 +136,7 @@ export default function ChatApp() {
 
 
   useEffect(() => {
-    const init = async () => {
-      if (!notebookId) return;
-      if (notebooks.length === 0) return;
-      const exists = notebooks.some((nb) => nb.id === notebookId);
-      if (!exists) return; // we’ll have already navigated away from invalid IDs in the previous effect
-
-      try {
-        const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat/history`);
-        if (!res.ok) throw new Error('Failed to load history');
-        const data = await res.json();
-        setPapers([]);
-        if (Array.isArray(data)) {
-          const processed = data.map((msg) => {
-            if (msg.role === 'assistant' && msg.papers?.length) {
-              return {
-                ...msg,
-                content: linkifyPaperIds(msg.content, msg.papers),
-              };
-            }
-            return msg;
-          });
-          setMessages(processed);
-        }
-      } catch (err) {
-        console.error('Error restoring chat history:', err);
-      }
-    };
-    init();
+    refreshMessages();
   }, [notebookId, notebooks, user]);
 
   useEffect(() => {
@@ -183,6 +163,48 @@ export default function ChatApp() {
   }, []);
 
 
+  const refreshMessages = async () => {
+    if (!notebookId) return;
+    if (notebooks.length === 0) return;
+    const exists = notebooks.some((nb) => nb.id === notebookId);
+    if (!exists) return;
+
+    try {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat/history`);
+      if (!res.ok) throw new Error('Failed to load history');
+      const data = await res.json();
+      
+      const seen = new Set();
+      const allPapers = [];
+      for (const msg of data) {
+        if (Array.isArray(msg.papers)) {
+          for (const p of msg.papers) {
+            if (!seen.has(p.paperId)) {
+              seen.add(p.paperId);
+              allPapers.push(p);
+            }
+          }
+        }
+      }
+      setPapers([]);
+      if (Array.isArray(data)) {
+        const processed = data.map((msg) => {
+          if (allPapers.length > 0) {
+            return {
+              ...msg,
+              content: linkifyPaperIds(msg.content, allPapers),
+            };
+          }
+          return msg;
+        });
+        setMessages(processed);
+      }
+    } catch (err) {
+      console.error('Error restoring chat history:', err);
+    }
+  };
+
+
   const createNewNotebook = async () => {
     try {
       const res = await authFetch(
@@ -202,7 +224,11 @@ export default function ChatApp() {
   };
 
 
-  const deleteNotebook = async (id) => {
+  const deleteNotebook = async (id, title) => {
+    if (!window.confirm(`Are you sure you want to delete this notebook (${title})?`)) {
+      return;
+    }
+
     try {
       const res = await authFetch(
         user,
@@ -223,22 +249,104 @@ export default function ChatApp() {
 
     } catch (err) {
       console.error(`Failed to delete notebook ${id}:`, err);
+      alert("Failed to delete notebook");
+    }
+  };
+
+  const toggleDropdown = (id) => {
+    setDropdownOpen(dropdownOpen === id ? null : id);
+  };
+
+  const renameNotebook = async (id, old_title) => {
+    const newTitle = prompt("Enter new notebook title:", old_title);
+      if (!newTitle || newTitle.trim() === "") {
+        return;
+      }
+
+    try {
+      const res = await authFetch(
+        user,
+        `${API_URL}/notebook/${id}/rename/${newTitle}`,
+        { method: 'PATCH' }
+      );
+      if (!res.ok) throw new Error(`Failed to rename notebook ${res.status}`);
+
+      // refresh the notebooks array
+      await fetchNotebooks();
+
+    } catch (err) {
+      console.error(`Failed to rename notebook ${id}:`, err);
+      alert("Failed to rename notebook");
     }
   };
 
 
-  const handleSubmit = async () => {
-    if (!question.trim()) return;
+  const handleRephrase = (msg) => {
+    setRephrasingMsg(msg.query_id);
+    setRephrasingContent(msg.content);
+  };
+
+  const cancelRephrase = () => {
+    setRephrasingMsg(null);
+    setRephrasingContent("");
+  };
+
+  const sendRephrase = async () => {
+    await deleteChatfrom(rephrasingMsg, true);
+    handleSubmit(rephrasingContent, true);
+    cancelRephrase();
+    // 🔧 Optional: persist edit to backend here
+  };
+
+  const handleEdit = (msg) => {
+    setEditingMsg(msg.query_id);
+    setEditContent(msg.content);
+  };
+
+  const cancelEdit = () => {
+    setEditingMsg(null);
+    setEditContent("");
+  };
+
+  const sendEdit = async () => {
+    await deleteChatfrom(editingMsg);
+    handleSubmit(editContent);
+    cancelEdit();
+    // 🔧 Optional: persist edit to backend here
+  };
+
+  const abortSubmit = async (id) => {
+    try {
+      const res = await authFetch(
+        user,
+        `${API_URL}/notebook/${id}/abort`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+
+      refreshMessages()
+      setIsStreaming(false)
+
+    } catch (err) {
+      console.error(`Failed to abort generation ${id}:`, err);
+      alert("Failed to stop generation");
+    }
+  };
+
+  const handleSubmit = async (editedQuestion = null, rephrasing = false) => {
+    const finalQuestion = editedQuestion ?? question;
+    if (!finalQuestion.trim()) return;
     let queryId;
     try {
       const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({
-          message: question, 
+          message: finalQuestion, 
           notebook_id: `${notebookId}`, 
           topK: topK,
-          paperLock: lockArticleList,}),
+          paperLock: lockArticleList,
+          rephrase: rephrasing}),
       });
       if (!res.ok) throw new Error('Failed to submit chat message');
       const data = await res.json();
@@ -249,14 +357,36 @@ export default function ChatApp() {
     }
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: question, query_id: queryId },
+      { role: 'user', content: finalQuestion, query_id: queryId },
       { role: 'assistant', content: '', query_id: queryId },
     ]);
     setQuestion('');
     streamAnswer(notebookId, queryId);
   };
 
+  const handleExpand = async (query_id) => {
+    try {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/expand`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query_id: `${query_id}`, 
+          notebook_id: `${notebookId}`, 
+          topK: topK,
+          paperLock: lockArticleList}),
+      });
+
+      if (!res.ok) throw new Error("Failed to trigger expansion");
+      const data = await res.json();
+      streamAnswer(notebookId, data.query_id);
+
+    } catch (err) {
+      console.error("Expand failed:", err);
+    }
+  };
+
   const streamAnswer = async (notebookId, query_id) => {
+
     const maxRetries = 3;
     let retryCount = 0;
 
@@ -274,28 +404,27 @@ export default function ChatApp() {
           throw new Error("Failed to open stream.");
         }
 
+        setPapers([]);
+        papersRef.current = [];
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         const parser = createParser({
           onEvent: (event) => {
             
             if (event.data) {
+              if (!papersLoadingRef.current && papersRef.current.length === 0 && assistantResponse.length > 100) {
+                papersLoadingRef.current = true;
+                loadPapers(notebookId, query_id).then((loadedPapers) => {
+                  setPapers(loadedPapers);
+                  papersRef.current = loadedPapers;
+                  papersLoadingRef.current = false;
+                });
+              }
+
               if (event.data === '<END_OF_MESSAGE>') {
                 reader.cancel();
                 success = true;
-
-                loadPapers(notebookId, query_id).then((loadedPapers) => {
-                  setMessages((prev) =>
-                    prev.map((msg) =>
-                      msg.query_id === query_id && msg.role === 'assistant'
-                        ? {
-                            ...msg,
-                            content: linkifyPaperIds(msg.content, loadedPapers),
-                          }
-                        : msg
-                    )
-                  );
-                });
 
                 setSelectedQueryIds(prev => {
                   const next = new Set(prev);
@@ -308,13 +437,20 @@ export default function ChatApp() {
               assistantResponse += '\n' + event.data;
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
+                
+                let content = assistantResponse;
+
+                if (papersRef.current.length > 0) {
+                  content = linkifyPaperIds(content, papersRef.current);
+                }
+
                 if (last?.role === 'assistant') {
                   return [
                     ...prev.slice(0, -1),
-                    { role: 'assistant', content: assistantResponse, query_id },
+                    { role: 'assistant', content, query_id },
                   ];
                 } else {
-                  return [...prev, { role: 'assistant', content: assistantResponse, query_id }];
+                  return [...prev, { role: 'assistant', content, query_id }];
                 }
               });
             }
@@ -345,7 +481,7 @@ export default function ChatApp() {
 
   const loadPapers = async (notebookId, query_id) => {
     try {
-      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/content/${query_id}`);
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/papers/${query_id}`);
       if (!res.ok) throw new Error('Failed to fetch papers');
       const data = await res.json();
       const results = data.papers.filter((p) => p.score > 0);
@@ -392,7 +528,7 @@ export default function ChatApp() {
     const allPapers = [];
     for (const id of newSelected) {
       const msg = messages.find(
-        m => m.query_id === id && m.role === 'assistant' && Array.isArray(m.papers)
+        m => m.query_id === id && Array.isArray(m.papers)
       );
       if (msg?.papers) {
         allPapers.push(...msg.papers);
@@ -412,6 +548,43 @@ export default function ChatApp() {
     setPapers(deduped);
     setExpandedIndexes(new Set()); // reset any expanded indexes
   };
+
+  const deleteQuery = async (query_id) => {
+    if (!window.confirm("Are you sure you want to delete this message?")) {
+      return;
+    }
+
+    try {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/content/${query_id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json'},
+      });
+
+      refreshMessages();
+
+    } catch (err) {
+      console.error("Failed to delete message", err);
+      alert("Failed to delete message");
+    }
+  }
+
+  const deleteChatfrom = async (query_id, keepUsermsg = false) => {
+    try {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/back/${query_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify({ keepUsermsg: keepUsermsg })
+      });
+
+      if (!res.ok) throw new Error('Failed to delete chat messages');
+
+      refreshMessages();
+
+    } catch (err) {
+      console.error("Failed to delete messages", err);
+      alert("Failed to delete messages");
+    }
+  }
 
   const toggleExpand = (index) => {
     setExpandedIndexes(prev => {
@@ -466,7 +639,7 @@ export default function ChatApp() {
     const seen = new Set();
     const all = [];
     for (const msg of messages) {
-      if (msg.role === 'assistant' && Array.isArray(msg.papers)) {
+      if (Array.isArray(msg.papers)) {
         for (const p of msg.papers) {
           if (!seen.has(p.paperId)) {
             seen.add(p.paperId);
@@ -509,10 +682,12 @@ export default function ChatApp() {
             justifyContent: 'space-between',  // <-- This is key
             alignItems: 'center',
             width: '100%',
-            marginBottom: '0.5rem'
+            marginBottom: '0.5rem',
             }}>
             <h2 style={{
-              margin: '1%', 
+              marginTop: '1%',
+              marginBottom: '1%', 
+              marginLeft: '4%', 
               fontWeight: 'bold',
               color: 'var(--main-font-color)',
               fontFamily: 'var(--main-font)',
@@ -527,18 +702,18 @@ export default function ChatApp() {
                 cursor: 'pointer',
                 fontSize: '1.3rem',
                 padding: '0.5rem',
-                margin: 0,
+                marginRight: '5%',
               }}
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                  src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                  src={leftCollapsed ? "/notebook_closed_icon.svg" : "/notebook_open_icon.svg"}
                   alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                   style={{
                     height: '1.7em', // or adjust as needed for your top bar
                     width: '1.7em',
                     display: 'block',
-                    marginRight: '1%',
+                    marginRight: '5%',
                     pointerEvents: 'none', // so clicks reach the button
                     background: 'transparent',
                   }}
@@ -546,7 +721,7 @@ export default function ChatApp() {
             </button>
           </div>
         )}
-        <div style={{ flex: 1, overflowY: "auto", padding: leftCollapsed ? 0 : "0.5rem" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: leftCollapsed ? 0 : "0.0rem" }}>
           {!leftCollapsed && (
             <>
               {/* Notebook list container—make this grow to fill the middle */}
@@ -567,7 +742,7 @@ export default function ChatApp() {
                   title="New notebook"
                 >
                   <img
-                    src= "/asXai_newnotebook_icon.svg"
+                    src= "/notebook_add_icon.svg"
                     alt= "New notebook"
                     style={{
                       height: '1.7em', // or adjust as needed for your top bar
@@ -606,20 +781,58 @@ export default function ChatApp() {
                       {nb.title}
                     </span>
 
-                    {/* trash icon to delete this notebook */}
-                    <button
-                      onClick={() => deleteNotebook(nb.id)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        marginLeft: '0.1rem',
-                        fontSize: '1.0rem',
-                      }}
-                      title="Delete this notebook"
-                    >
-                      🗑️
-                    </button>
+                    <div style={{ position: 'relative' }}>
+                      <button
+                        onClick={() => toggleDropdown(nb.id)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          display: 'block',
+                          marginRight: '1%',
+                          fontSize: '1.2rem',
+                        }}
+                        title="Notebook actions"
+                      >
+                        ⋮
+                      </button>
+
+                      {dropdownOpen === nb.id && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: '100%',
+                            right: 0,
+                            background: 'white',
+                            border: '1px solid #ccc',
+                            borderRadius: '4px',
+                            zIndex: 10,
+                            boxShadow: '0px 2px 8px rgba(0,0,0,0.2)',
+                            fontSize: '0.9rem',
+                            padding: '0.2rem',
+                          }}
+                        >
+                          <div
+                            onClick={() => {
+                              renameNotebook(nb.id, nb.title);
+                              setDropdownOpen(null);
+                            }}
+                            style={{ padding: '0.3rem 0.6rem', cursor: 'pointer' }}
+                          >
+                            Rename
+                          </div>
+                          <div
+                            onClick={() => {
+                              deleteNotebook(nb.id, nb.title);
+                              setDropdownOpen(null);
+                            }}
+                            style={{ padding: '0.3rem 0.6rem', cursor: 'pointer', color: 'red' }}
+                          >
+                            Delete
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -776,7 +989,7 @@ export default function ChatApp() {
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                src={leftCollapsed ? "/notebook_closed_icon.svg" : "/notebook_open_icon.svg"}
                 alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                 style={{
                   height: '1.7em', // or adjust as needed for your top bar
@@ -866,6 +1079,7 @@ export default function ChatApp() {
               key={idx}
               onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
               style={{
+                position: 'relative',
                 background: msg.query_id && selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)' : 'var(--main-fg)',
                 padding: '1rem',
                 borderRadius: '1%',
@@ -887,50 +1101,140 @@ export default function ChatApp() {
                   }}
                 />
               </strong>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  a({ href, children }) {
-                    const paperId = href?.replace('#', '');
-                    const isHighlighted = highlightedPaperIds.has(paperId);
-                    return (
-                      <a
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          const paperId = href?.replace('#', '');
-                          setHighlightedPaperIds((prev) => {
-                            const next = new Set(prev);
+              {msg.role === 'user' && editingMsg === msg.query_id ? (
+                <div>
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    style={{ width: '100%', minHeight: '5rem' }}
+                  />
+                  <div style={{ marginTop: '0.5rem', textAlign: 'right' }}>
+                    <button onClick={() => sendEdit()}>Send</button>
+                    <button onClick={() => cancelEdit()}>Cancel</button>
+                  </div>
+                </div>
+              ) : 
+              msg.role === 'assistant' && rephrasingMsg === msg.query_id ? (
+                <div>
+                  <textarea
+                    value={rephrasingContent}
+                    onChange={(e) => setRephrasingContent(e.target.value)}
+                    style={{ width: '100%', minHeight: '5rem' }}
+                  />
+                  <div style={{ marginTop: '0.5rem', textAlign: 'right' }}>
+                    <button onClick={() => sendRephrase()}>Rephrase</button>
+                    <button onClick={() => cancelRephrase()}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    a({ href, children }) {
+                      const paperId = href?.replace('#', '');
+                      const isHighlighted = highlightedPaperIds.has(paperId);
+                      return (
+                        <a
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const paperId = href?.replace('#', '');
+                            setHighlightedPaperIds((prev) => {
+                              const next = new Set(prev);
 
-                            if (e.metaKey || e.ctrlKey) {
-                              next.has(paperId) ? next.delete(paperId) : next.add(paperId);
-                            } else {
-                              if (prev.has(paperId) && prev.size === 1) {
-                                next.clear();
+                              if (e.metaKey || e.ctrlKey) {
+                                next.has(paperId) ? next.delete(paperId) : next.add(paperId);
                               } else {
-                                next.clear();
-                                next.add(paperId);
+                                if (prev.has(paperId) && prev.size === 1) {
+                                  next.clear();
+                                } else {
+                                  next.clear();
+                                  next.add(paperId);
+                                }
                               }
-                            }
 
-                            return next;
-                          });
-                        }}
-                        style={{
-                          color: isHighlighted ? 'var(--main-font-link-sel)' : 'var(--main-font-link)' ,
-                          textDecoration: 'underline',
-                          fontWeight: isHighlighted ? 'bold' : 'normal',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {children}
-                      </a>
-                    );
-                  },
-                }}
-              >
-                {msg.content}
-              </ReactMarkdown>
+                              return next;
+                            });
+                          }}
+                          style={{
+                            color: isHighlighted ? 'var(--main-font-link-sel)' : 'var(--main-font-link)' ,
+                            textDecoration: 'underline',
+                            fontWeight: isHighlighted ? 'bold' : 'normal',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {children}
+                        </a>
+                      );
+                    },
+                  }}
+                >
+                  {msg.content}
+                </ReactMarkdown>
+              )}
+
+              {msg.query_id && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '10px',
+                  right: '10px',
+                  display: 'flex',
+                  gap: '0.5rem',
+                }}>
+                  {msg.role === 'assistant' &&
+                    <span
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '1.3em',
+                        color: 'blue',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExpand(msg.query_id);
+                      }}
+                      title="More detail"
+                    >
+                      🔎
+                    </span>
+                  }
+
+                  <span
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '1.3em',
+                      color: 'orange',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (msg.role === 'user') {
+                        cancelRephrase()
+                        handleEdit(msg);
+                      } else if (msg.role === 'assistant') {
+                        cancelEdit()
+                        handleRephrase(msg);
+                      }
+                    }}
+                    title="Edit message"
+                  >
+                    ✏️
+                  </span>
+
+                  <span
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '1.3em',
+                      color: 'red',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteQuery(msg.query_id);
+                    }}
+                    title="Delete message"
+                  >
+                    🗑️
+                  </span>
+                </div>
+              )}
             </div>
           ))}
           <div ref={messagesEndRef} />
@@ -976,7 +1280,7 @@ export default function ChatApp() {
             }}
           />
           <button
-            onClick={handleSubmit}
+            onClick={() => (!isStreaming ? handleSubmit() : abortSubmit(notebookId))}
             style={{
               padding: '0.75rem 1.25rem',
               backgroundColor: '#2563eb',
@@ -989,10 +1293,12 @@ export default function ChatApp() {
               fontFamily: 'var(--main-font)',
             }}
           >
-            Send
+            {!isStreaming ? 'Send' : '⏹'}
           </button>
         </div>
       </div>
+
+
 
       {/* Sidebar with top articles */}
       <div

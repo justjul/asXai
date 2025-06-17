@@ -12,8 +12,8 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP, GenerationPlannerMCP, SectionGenerationMCP
-from .mcp_library import parse_mcp_response
+from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP
+from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP
 
 from tqdm import tqdm
 from asxai.utils import load_params
@@ -115,12 +115,28 @@ class OllamaManager:
                 response = await self.client.chat(model=model_name, messages=messages, stream=False, **kwargs)
                 return response['message']['content']
 
+    async def generateQuickReply(self, query: str,
+                                 documents: str,
+                                 quick_instruct: str = chat_config['instruct_quickreply'],
+                                 **kwargs):
+        instruct = QuickReplyMCP.generate_prompt(quick_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        messages = [{'role': 'user', 'content': doc} for doc in documents]
+        messages += [{'role': 'user', 'content': prompt}]
+
+        kwargs.pop("stream", None)
+        streamer = await self.generate(messages=messages, stream=True, **kwargs)
+
+        async for chunk in streamer:
+            yield chunk
+
     async def generatePlan(self, query: str,
                            documents: str,
                            genplan_instruct: str = chat_config['instruct_genplan'],
-                           **kwargs):
+                           **kwargs) -> List[dict]:
 
-        articles_serialized = "- ARTICLES:\n" + documents
+        articles_serialized = "- ARTICLES:\n" + '\n'.join(documents)
         query_serialized = "- QUERY:\n" + query
 
         instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
@@ -131,7 +147,7 @@ class OllamaManager:
 
         response = await self.generate(messages=messages, **kwargs)
 
-        result = parse_mcp_response(response)
+        result = GenerationPlannerMCP.parse(response)
 
         return result
 
@@ -155,21 +171,20 @@ class OllamaManager:
 
     async def generateTitle(self, query: str,
                             title_instruct: str = chat_config['instruct_title'],
-                            **kwargs):
+                            **kwargs) -> dict:
         instruct = NotebookTitleMCP.generate_prompt(title_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
         messages = [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, **kwargs)
-
-        result = parse_mcp_response(response)
+        result = NotebookTitleMCP.parse(response)
 
         return result
 
     async def chatSummarize(self, chat_history: list[dict],
                             chatSummary_instruct:  str = chat_config['instruct_chatSummary'],
-                            summary_len: int = chat_config['summary_length']):
+                            summary_len: int = chat_config['summary_length']) -> str:
         instruct = ChatSummarizerMCP.generate_prompt(chatSummary_instruct)
         instruct = instruct.replace("<SUMMARY_LENGTH>", str(summary_len))
 
@@ -191,7 +206,6 @@ class OllamaManager:
         messages = [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, options={'temperature': 0.0})
-        print(f"SUMMARIZER OUTPUT: {response}")
         # result = parse_mcp_response(response)
 
         return response
@@ -207,8 +221,7 @@ class OllamaManager:
         messages = context + [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, **kwargs)
-
-        result = parse_mcp_response(response)
+        result = ExpandQueryMCP.parse(response)
 
         return result
 
@@ -221,9 +234,9 @@ class OllamaManager:
 
         messages = [{'role': 'user', 'content': prompt}]
 
-        response = await self.generate(messages=messages, options={'temperature': 0.0})
+        response = await self.generate(messages=messages, options={'temperature': 0.0}, **kwargs)
+        result = QueryParseMCP.parse(response)
 
-        result = parse_mcp_response(response)
         logger.info(f"Parsed query: {result}")
         result['original_query'] = query
         return result

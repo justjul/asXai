@@ -21,6 +21,7 @@ import config
 from asxai.logger import get_logger
 from asxai.utils import load_params, running_inside_docker
 from ..authenticate.auth import verify_token, set_admin_claim, revoke_admin_claim, get_firebase_users
+from .notebook_manager import NotebookManager
 from fastapi import Depends
 from contextlib import asynccontextmanager
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry, Summary
@@ -33,6 +34,8 @@ search_config = params["search"]
 
 KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
 CHAT_REQ_TOPIC = "notebook-requests"
+CHAT_CANCEL_TOPIC = "notebook-cancel"
+
 HASH_LEN = search_config['hash_len']
 
 USERS_ROOT = config.USERS_ROOT
@@ -224,25 +227,6 @@ def delete_user(user_id: str) -> str:
     return {}
 
 
-def list_notebooks(user_id: str) -> List[str]:
-    user_dir = os.path.join(USERS_ROOT, user_id)
-    if not os.path.exists(user_dir):
-        return []
-
-    notebooks = []
-    for f in os.listdir(user_dir):
-        if f.endswith(".chat.json"):
-            try:
-                with open(os.path.join(user_dir, f), "r") as j:
-                    data = json.load(j)
-                    notebooks.append({"id": f[:-10],
-                                      "name": data[-1].get("notebook_id", f[:-10]),
-                                      "title": data[-1].get("notebook_title", f[:-10])})
-            except Exception:
-                continue
-    return notebooks
-
-
 def list_users():
     return os.listdir(USERS_ROOT)
 
@@ -275,11 +259,25 @@ def get_result(task_id: str, timeout: float = search_config['timeout']) -> Optio
         return None
 
 
+Notebook_manager = NotebookManager(config.USERS_ROOT)
+
+
 class ChatRequest(BaseModel):
     message: str
     model: str = "default"
     topK: int = search_config["topk_rerank"]
     paperLock: bool = False
+    rephrase: bool = False
+    regenerate: bool = False
+
+
+class ExpandRequest(BaseModel):
+    query_id: str
+    model: str = "default"
+    topK: int = search_config["topk_rerank"]
+    paperLock: bool = False
+    rephrase: bool = False
+    regenerate: bool = False
 
 
 @app.post("/notebook/{notebook_id}/chat")
@@ -298,6 +296,8 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
         "model": req.model,
         "topK": req.topK,
         "paperLock": req.paperLock,
+        "rephrase": req.rephrase,
+        "regenerate": req.regenerate,
         "timestamp": time.time(),
         "done": 0
     }
@@ -307,6 +307,36 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
     return {"status": "submitted",
             "task_id": task_id,
             "query_id": query_id,
+            "user_id": user_id,
+            "notebook_id": notebook_id}
+
+
+@app.post("/notebook/{notebook_id}/expand")
+async def submit_chat(notebook_id: str, req: ExpandRequest, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    create_user(user_id)
+    task_id = f"{user_id}/{notebook_id}"
+    payload = {
+        "task_id": task_id,
+        "query_id": req.query_id,
+        "user_id": user_id,
+        "notebook_id": notebook_id,
+        "content": None,
+        "role": "user",
+        "model": req.model,
+        "topK": req.topK,
+        "paperLock": req.paperLock,
+        "rephrase": req.rephrase,
+        "regenerate": req.regenerate,
+        "timestamp": None,
+        "done": 0
+    }
+    print(req.model)
+    producer.produce(CHAT_REQ_TOPIC, key=task_id, value=json.dumps(payload))
+    producer.flush()
+    return {"status": "expansion requested",
+            "task_id": task_id,
+            "query_id": req.query_id,
             "user_id": user_id,
             "notebook_id": notebook_id}
 
@@ -366,6 +396,20 @@ def stream_response(notebook_id: str, decoded_token: dict = Depends(verify_token
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.post("/notebook/{notebook_id}/abort")
+async def abort_generation(notebook_id: str, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+    payload = {
+        "task_id": task_id,
+        "timestamp": time.time(),
+    }
+    producer.produce(CHAT_CANCEL_TOPIC, key=task_id, value=json.dumps(payload))
+    producer.flush()
+    return {"status": "cancelled",
+            "task_id": task_id}
+
+
 @app.get("/notebook/{notebook_id}/chat/final")
 def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
@@ -376,8 +420,7 @@ def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        with open(chat_path) as f:
-            history = json.load(f)
+        history = Notebook_manager.load_history(task_id)
 
         endtime = time.time() + 10  # timeout after 10 seconds
         user_msg, assistant_msg = None, None
@@ -388,14 +431,15 @@ def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)
                               if m["role"] == "user"), None)
             if user_entry:
                 user_msg = user_entry["content"]
-                query_id = user_entry.get("query_id")
+                papers = user_entry["papers"]
+                query_id = user_entry["query_id"]
             if query_id:
                 assistant_msg = next(
                     (m["content"] for m in reversed(history)
                      if m["role"] == "assistant" and m.get("query_id") == query_id),
                     None
                 )
-                papers = next(
+                papers = papers or next(
                     (m["papers"] for m in reversed(history)
                      if m["role"] == "assistant" and m.get("query_id") == query_id),
                     None
@@ -430,27 +474,35 @@ def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        with open(chat_path) as f:
-            history = json.load(f)
+        query_msg = Notebook_manager.load_query(task_id, query_id)
+
+        if not query_msg:
+            raise HTTPException(
+                status_code=404, detail="No mathcing query Id.")
 
         endtime = time.time() + 10  # timeout after 10 seconds
         user_msg, assistant_msg = None, None
 
         while (user_msg is None or assistant_msg is None) and time.time() < endtime:
-            user_entry = next((m for m in reversed(history)
-                              if m["role"] == "user" and m.get("query_id") == query_id), None)
+            user_entry = next((m for m in reversed(query_msg)
+                              if m["role"] == "user"), None)
             if user_entry:
                 user_msg = user_entry["content"]
-                query_id = user_entry.get("query_id")
-            if query_id:
-                assistant_msg = next(
-                    (m["content"] for m in reversed(history)
-                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+                papers = next(
+                    (m["papers"]
+                     for m in reversed(query_msg) if m["role"] == "user"),
                     None
                 )
-                papers = next(
-                    (m["papers"] for m in reversed(history)
-                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+
+                assistant_msg = next(
+                    (m["content"]
+                     for m in reversed(query_msg) if m["role"] == "assistant"),
+                    None
+                )
+
+                papers = papers or next(
+                    (m["papers"]
+                     for m in reversed(query_msg) if m["role"] == "assistant"),
                     None
                 )
             if user_msg and assistant_msg:
@@ -473,18 +525,109 @@ def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(
             status_code=500, detail="Failed to read chat history.")
 
 
+@app.delete("/notebook/{notebook_id}/content/{query_id}")
+def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
+    if not os.path.exists(chat_path):
+        raise HTTPException(status_code=404, detail="Chat history not found.")
+
+    try:
+        diff = Notebook_manager.delete_query(task_id, query_id)
+
+        if diff == 0:
+            # Nothing was deleted
+            raise HTTPException(
+                status_code=404, detail="No messages found with given query_id.")
+
+        return {"status": "success", "deleted": diff}
+
+    except Exception as e:
+        logger.error(f"Error deleting chat message for {task_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to delete chat message.")
+
+
+@app.patch("/notebook/{notebook_id}/back/{query_id}")
+def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: bool = False, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
+    if not os.path.exists(chat_path):
+        raise HTTPException(status_code=404, detail="Chat history not found.")
+
+    try:
+        diff = Notebook_manager.delete_queries_from(
+            task_id, query_id, keepUserMsg)
+
+        if diff == 0:
+            raise HTTPException(
+                status_code=404, detail="No messages found with given query_id.")
+
+        return {"status": "success", "deleted": diff}
+
+    except Exception as e:
+        logger.error(f"Error deleting chat messages for {task_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to delete chat messages.")
+
+
+@app.get("/notebook/{notebook_id}/papers/{query_id}")
+def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
+    if not os.path.exists(chat_path):
+        raise HTTPException(status_code=404, detail="Chat history not found.")
+
+    try:
+        history = Notebook_manager.load_history(task_id)
+
+        endtime = time.time() + 10  # timeout after 10 seconds
+        user_msg, papers = None, None
+
+        while user_msg is None and time.time() < endtime:
+            user_entry = next((m for m in reversed(history)
+                              if m["role"] == "user" and m.get("query_id") == query_id), None)
+            if user_entry:
+                user_msg = user_entry["content"]
+                papers = user_entry["papers"]
+                papers = papers or next(
+                    (m["papers"] for m in reversed(history)
+                     if m["role"] == "assistant" and m.get("query_id") == query_id),
+                    None
+                )
+            if user_msg:
+                break
+            time.sleep(0.1)  # avoid busy waiting
+
+        if not user_msg:
+            raise HTTPException(
+                status_code=404, detail="Failed to load papers.")
+
+        return {
+            "papers": papers
+        }
+
+    except Exception as e:
+        logger.error(f"Error loading papers for {task_id}/{query_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to load papers.")
+
+
 @app.get("/notebook/{notebook_id}/chat/history")
 def get_history(notebook_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
-    chat_path = os.path.join(config.USERS_ROOT, f"{task_id}.chat.json")
-    if os.path.exists(chat_path):
-        with open(chat_path) as f:
-            history = json.load(f)
-            history = [m for m in history if m.get("access") == 'all']
-            return history
-    return []
+    history = Notebook_manager.load_history(task_id)
+    history = [m for m in history if m.get("access") == 'all']
+
+    return history
 
 
 @app.get("/notebook/{notebook_id}/chat/result")
@@ -499,20 +642,30 @@ async def get_latest_result(notebook_id: str, decoded_token: dict = Depends(veri
     return {"task_id": task_id, "notebook": result}
 
 
+@app.patch("/notebook/{notebook_id}/rename/{new_title}")
+async def rename_notebook(notebook_id: str, new_title: str, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    Notebook_manager.rename(task_id, new_title)
+
+    return {"task_id": task_id, "notebook_id": notebook_id, "notebook_title": new_title}
+
+
 @app.delete("/notebook/{notebook_id}/delete")
 async def delete_notebook(notebook_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
-    delete_task(task_id)
+    Notebook_manager.delete(task_id)
 
-    return {"user_id": task_id, "notebook_id": notebook_id}
+    return {"task_id": task_id, "notebook_id": notebook_id}
 
 
 @app.get("/notebook")
 async def get_user_notebooks(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
-    return list_notebooks(user_id)
+    return Notebook_manager.list(user_id)
 
 
 @app.get("/notebook/new_task_id")

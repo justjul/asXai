@@ -26,6 +26,9 @@ class AsyncRunner:
     def run(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result()
 
+    def submit(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
 
 def merge_dicts(dict_list):
     merged = {}

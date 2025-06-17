@@ -45,6 +45,24 @@ def parse_mcp_response(text: str):
         return {}
 
 
+class RobustKeyExtractor:
+    def __init__(self, key_map):
+        self.key_map = key_map
+
+    def extract(self, record: dict):
+        extracted = {}
+        for target_field, candidates in self.key_map.items():
+            value = self._extract_first(record, candidates)
+            extracted[target_field] = value
+        return extracted
+
+    def _extract_first(self, record: dict, candidates: list):
+        for key, value in record.items():
+            if any(candidate in key.lower() for candidate in candidates):
+                return value
+        return None
+
+
 class NotebookTitleMCP(BaseModel):
     title: str = Field(
         description="A short, clear title summarizing the user query as a notebook topic. Should be 1-3 words. No periods.")
@@ -57,6 +75,15 @@ class NotebookTitleMCP(BaseModel):
             fields.append(f"- {field_name}: {description}")
         prompt = instruct.replace("<FIELDS>", "\n".join(fields))
         return prompt
+
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+        key_map = {
+            'title': ['title', 'topic', 'heading'],
+        }
+        extractor = RobustKeyExtractor(key_map)
+        return extractor.extract(res)
 
 
 class ChatSummarizerMCP(BaseModel):
@@ -93,6 +120,23 @@ class QueryParseMCP(BaseModel):
         prompt = instruct.replace("<FIELDS>", "\n".join(fields))
         return prompt
 
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+        key_map = {
+            'query': ['query', 'question'],
+            'authorName': ['authorName', 'author', 'name'],
+            'publicationDate_start': ['publicationDate_start', 'start'],
+            'publicationDate_end': ['publicationDate_end', 'end'],
+            'cleaned_query': ['cleaned_query', 'cleaned'],
+        }
+        extractor = RobustKeyExtractor(key_map)
+
+        res = extractor.extract(res)
+        res['cleaned_query'] = res.get(
+            'cleaned_query') or res.get('query') or None
+        return extractor.extract(res)
+
 
 class ExpandQueryMCP(BaseModel):
     query: str = Field(
@@ -116,11 +160,24 @@ class ExpandQueryMCP(BaseModel):
         prompt = instruct.replace("<FIELDS>", "\n".join(fields))
         return prompt
 
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+        key_map = {
+            'query': ['query', 'question'],
+            'research_field': ['research_field', 'research', 'field', 'discipline', 'domain'],
+            'main_topics': ['main_topics', 'main', 'topics'],
+            'key_concepts': ['key_concepts', 'key', 'concept'],
+            'search_needed': ['search_needed', 'search'],
+        }
+        extractor = RobustKeyExtractor(key_map)
+        return extractor.extract(res)
+
 
 class SectionPlan(BaseModel):
     title: str = Field(
         description="The title or sub-question to answer in this section")
-    description: str = Field(
+    scope: str = Field(
         description="A short description of the topic covered in the section")
     paperIds: List[str] = Field(
         description="List of article Ids that should be used to generate this section")
@@ -128,6 +185,8 @@ class SectionPlan(BaseModel):
 
 class GenerationPlannerMCP(BaseModel):
     sections: List[SectionPlan]
+    abstract: str = Field(
+        description="A short summary of 2-3 sentences that answers the question")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -137,6 +196,29 @@ class GenerationPlannerMCP(BaseModel):
             fields.append(f"- {field_name}: {description}")
         prompt = instruct.replace("<FIELDS>", "\n".join(fields))
         return prompt
+
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+
+        abstract = res.get('abstract', [])
+        sections = res.get('sections', [])
+
+        key_map = {
+            'title': ['title', 'topic'],
+            'scope': ['description', 'content', 'scope'],
+            'paperIds': ['paper', 'references', 'papers']
+        }
+        extractor = RobustKeyExtractor(key_map)
+        sections = [extractor.extract(section) for section in sections]
+
+        all_paperIds = [
+            paperId for section in sections for paperId in section["paperIds"]]
+        for section in sections:
+            if "introduction" in section["title"].lower() or "tldr" in section["title"].lower():
+                section["paperIds"] = all_paperIds
+
+        return {"abstract": abstract, "sections": sections}
 
 
 class SectionGenerationMCP(BaseModel):
@@ -155,3 +237,31 @@ class SectionGenerationMCP(BaseModel):
             fields.append(f"- {field_name}: {description}")
         prompt = instruct.replace("<FIELDS>", "\n".join(fields))
         return prompt
+
+
+class QuickReplyMCP(BaseModel):
+    summary: str = Field(
+        description="A concise scientific answer (max 2-3 paragraphs) that directly addresses the user query, using provided documents where possible. Inline citations use paperId in square brackets."
+    )
+    cited_papers: Optional[List[str]] = Field(
+        description="List of paperIds actually cited in the answer"
+    )
+
+    @classmethod
+    def generate_prompt(cls, instruct: str) -> str:
+        fields = []
+        for field_name, field_obj in cls.model_fields.items():
+            description = field_obj.description or "No description"
+            fields.append(f"- {field_name}: {description}")
+        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
+        return prompt
+
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+        key_map = {
+            'summary': ['summary', 'answer', 'response', 'reply'],
+            'cited_papers': ['cited_papers', 'paperIds', 'papers', 'references'],
+        }
+        extractor = RobustKeyExtractor(key_map)
+        return extractor.extract(res)

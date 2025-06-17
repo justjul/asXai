@@ -32,6 +32,9 @@ services:
       - ${OLLAMA_VOL_HOST}:/root/.ollama  # Persist model downloads
     environment:
       - OLLAMA_HOST='0.0.0.0'
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      # - OLLAMA_NUM_PARALLEL=16 
     deploy:
       resources:
         reservations:
