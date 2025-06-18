@@ -15,10 +15,8 @@ def parse_mcp_response(text: str):
         start = text.index('{')
         end = text.rindex('}') + 1
         json_block = text[start:end]
-        print(json_block)
         json_block = json_block.replace("None", "null")
         dic = json.loads(json_block)
-        print(dic)
         norm_dic = dic
         # default = datetime(1, 1, 1)  # defaults everything to Jan 1
 
@@ -139,17 +137,11 @@ class QueryParseMCP(BaseModel):
 
 
 class ExpandQueryMCP(BaseModel):
-    query: str = Field(
-        description="The user's questions rephrased in a more descriptive and complete sentence, "
-                    + "suitable for retrieving relevant scientific documents.")
-    research_field: str = Field(description="Relevant fields of research among Computer science, Physics, Biology and Medecine "
-                                + "returned as a list of strings.")
-    main_topics: List[str] = Field(
-        description="3-5 topics of research related to the user's question, returned as a list of strings.")
-    key_concepts: List[str] = Field(
-        description="Specific concepts, keywords, or methods relevant to the search, returned as a list of strings.")
+    queries: List[str] = Field(
+        description="A list of 1-3 specific questions that collectively cover the user's query, returned as a list of strings."
+        + "Each should be clear, concise, and suitable for retrieving relevant scientific documents.\n")
     search_needed: bool = Field(
-        description="Whether additional article search is needed to answer this question (true or false)")
+        description="True or False; whether a literature search is needed to answer the user's question, based on scope, expertise coverage, and ethical alignment.")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -157,18 +149,44 @@ class ExpandQueryMCP(BaseModel):
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
             fields.append(f"- {field_name}: {description}")
-        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
-        return prompt
+        return instruct.replace("<FIELDS>", "\n".join(fields))
 
     @classmethod
     def parse(cls, response):
         res = parse_mcp_response(response)
         key_map = {
-            'query': ['query', 'question'],
+            'queries': ['sub_queries', 'questions', 'queries'],
+            'search_needed': ['search_needed', 'search', 'needed']
+        }
+        extractor = RobustKeyExtractor(key_map)
+        return extractor.extract(res)
+
+
+class KeywordsMCP(BaseModel):
+    query: str = Field(description="The original query being analyzed.")
+    research_field: str = Field(description="Relevant field of research among Computer science, Physics, Biology, or Medicine "
+                                + "returned as a list of strings.")
+    main_topics: List[str] = Field(
+        description="3-5 topics of research related to the user's question, returned as a list of strings.")
+    key_concepts: List[str] = Field(
+        description="Specific concepts, keywords, or methods relevant to the search, returned as a list of strings.")
+
+    @classmethod
+    def generate_prompt(cls, instruct: str) -> str:
+        fields = []
+        for field_name, field_obj in cls.model_fields.items():
+            description = field_obj.description or "No description"
+            fields.append(f"- {field_name}: {description}")
+        return instruct.replace("<FIELDS>", "\n".join(fields))
+
+    @classmethod
+    def parse(cls, response):
+        res = parse_mcp_response(response)
+        key_map = {
+            'query': ['question', 'query'],
             'research_field': ['research_field', 'research', 'field', 'discipline', 'domain'],
             'main_topics': ['main_topics', 'main', 'topics'],
             'key_concepts': ['key_concepts', 'key', 'concept'],
-            'search_needed': ['search_needed', 'search'],
         }
         extractor = RobustKeyExtractor(key_map)
         return extractor.extract(res)

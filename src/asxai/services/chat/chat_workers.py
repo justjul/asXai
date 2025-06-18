@@ -335,7 +335,7 @@ class ChatManager:
             while True:
                 try:
                     res = requests.get(
-                        f"{SEARCH_API_URL}/search/{self.task_id}").json()
+                        f"{SEARCH_API_URL}/search/{self.task_id}/{search_query_id}").json()
                     res = res['notebook']
                     if (res and search_query_id in {r['query_id'] for r in res}):
                         break
@@ -345,9 +345,14 @@ class ChatManager:
                 if time.time() > endtime:
                     break
 
-            papers = [
-                pl for pl in res if pl['query_id'] == search_query_id and pl.get('paperId')
-            ]
+            papers = []
+            match_generator = (
+                pl for pl in res if pl['query_id'] == search_query_id)
+            while True:
+                try:
+                    papers.append(next(match_generator))
+                except StopIteration:
+                    break
 
             for paper in papers:
                 if paper['openAccessPdf'].startswith("gs://"):
@@ -397,32 +402,31 @@ async def ollama_chat(payload, ollama_manager):
 
         if chat_manager.mode in ["reply", "regenerate"]:
             startime = time.time()
-            chat_manager.stream(" *Expanding* ")
-            expanded_query = await ollama_manager.expand(query=chat_manager.user_message,
-                                                         chat_history=context)
+            chat_manager.stream(" *Processing query* ")
+            expanded_query = await ollama_manager.processQuery(query=chat_manager.user_message,
+                                                               chat_history=context)
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
-            if expanded_query['search_needed']:
-                startime = time.time()
-                chat_manager.stream(" *Parsing* ")
-
-                parsed_search_query = await ollama_manager.parse(expanded_query['query'])
-                payload_filters = parsed_search_query
-
-                chat_manager.stream(f"*{round(time.time() - startime)}s*")
-
+            if expanded_query:
                 startime = time.time()
                 chat_manager.stream(" *Searching* ")
-                chat_manager.submit_search(
-                    prefix_id=0,
-                    query={'query': parsed_search_query.get('cleaned_query'),
-                           **payload_filters, },
-                    topK=topK, paperLock=paperLock
-                )
+                num_search = len(expanded_query)
+                for k, query in enumerate(expanded_query):
+                    chat_manager.submit_search(
+                        prefix_id=k,
+                        query=query,
+                        topK=(topK // num_search + 1), paperLock=paperLock
+                    )
 
-                papers = chat_manager.load_search_result(prefix_id=0)
+                papers = []
+                for k, query in enumerate(expanded_query):
+                    search_results = chat_manager.load_search_result(
+                        prefix_id=k)
+                    papers.extend(search_results)
+                    query['paperIds'] = [p['paperId'] for p in search_results]
 
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
+
             else:
                 papers = []
 
@@ -447,16 +451,25 @@ async def ollama_chat(payload, ollama_manager):
         ollama_streamers = []
 
         if chat_manager.mode in ["reply", "regenerate"]:
+            if expanded_query:
+                full_query = ' \n'.join([q['query'] for q in expanded_query])
+            else:
+                full_query = chat_manager.user_message
+
             ollama_streamers.append(
-                ollama_manager.generateQuickReply(query=expanded_query['query'],
+                ollama_manager.generateQuickReply(query=full_query,
                                                   documents=serialize_documents(papers))
             )
             sections = [{"title": '', }]
             abstract = []
-        elif chat_manager.mode in ["expand"]:
+        elif chat_manager.mode in ["expand"] and expanded_query:
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
-            generationPlan = await ollama_manager.generatePlan(query=expanded_query['query'],
+            if expanded_query:
+                full_query = ' \n'.join([q['query'] for q in expanded_query])
+            else:
+                full_query = chat_manager.user_message
+            generationPlan = await ollama_manager.generatePlan(query=full_query,
                                                                documents=serialize_documents(papers))
 
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
@@ -523,13 +536,14 @@ async def ollama_chat(payload, ollama_manager):
 
         logger.info(f"Streaming complete for task_id={task_id}")
 
+        await Notebook_manager.search_cleanup(task_id)
+
     except Exception as e:
         logger.error(f"Error handling chat request: {e}")
 
     finally:
         chat_manager.delete_stream()
         await Notebook_manager.chat_cleanup(task_id)
-        await Notebook_manager.search_cleanup(task_id)
 
     return full_response
 

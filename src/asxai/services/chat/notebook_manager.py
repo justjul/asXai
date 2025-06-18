@@ -154,26 +154,44 @@ class NotebookManager:
 
         return len(chat_history) - len(new_chat_history)
 
+    def collect_searches(self, task_id):
+        searchQ_path = os.path.join(self.users_root, f"{task_id}")
+        query_results = []
+        if os.path.isdir(searchQ_path):
+            fname_list = os.listdir(searchQ_path)
+            for fname in fname_list:
+                with open(os.path.join(searchQ_path, fname), "r") as f:
+                    query_results.extend(json.load(f))
+        return query_results
+
     async def search_cleanup(self, task_id):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return 0
 
-        search_path = self.get_search_path(task_id)
-        if not os.path.isfile(search_path):
-            return 0
-
         with open(chat_path, "r") as f:
             chat_history = json.load(f)
 
-        all_query_ids = [m.get("query_id") for m in chat_history if m.get(
-            "role") == "assistant"]
+        all_query_ids = set([m.get("query_id") for m in chat_history if m.get(
+            "role") == "assistant"])
 
-        with open(search_path, "r") as f:
-            search_history = json.load(f)
+        search_path = self.get_search_path(task_id)
+        query_results = self.collect_searches(task_id)
+        if os.path.isfile(search_path):
+            with open(search_path, "r") as f:
+                search_history = json.load(f)
+        else:
+            search_history = query_results
 
         new_search_history = [pl for pl in search_history if pl.get(
-            "query_id", '').strip('_', 1)[-1] in all_query_ids]
+            "query_id", '').split('_', 1)[-1] in all_query_ids]
+
+        unique_papers = {}
+        for paper in new_search_history:
+            pid = paper.get("paperId")
+            unique_papers[pid] = paper
+
+        new_search_history = list(unique_papers.values())
 
         with open(search_path, "w") as f:
             json.dump(new_search_history, f)

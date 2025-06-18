@@ -126,25 +126,23 @@ def run_search_worker():
 
 async def batch_and_save(raw_payloads):
     print(raw_payloads)
-    parsed_queries = {pl["task_id"]: pl["query"] for pl in raw_payloads}
-    task_ids = [pl["task_id"] for pl in raw_payloads]
-    query_ids = {pl["task_id"]: pl["query_id"]
+    query_ids = {pl["query_id"]
                  for pl in raw_payloads}
-    topKs = {pl["task_id"]: pl["topK"]
+    parsed_queries = {pl["query_id"]: pl["query"] for pl in raw_payloads}
+    task_ids = {pl["query_id"]: pl["task_id"]
+                for pl in raw_payloads}
+    topKs = {pl["query_id"]: pl["topK"]
              for pl in raw_payloads}
-    paperLocks = {pl["task_id"]: pl["paperLock"]
+    paperLocks = {pl["query_id"]: pl["paperLock"]
                   for pl in raw_payloads}
 
     expanded_queries = [parsed_queries[qid].get('query')
-                        for i, qid in enumerate(task_ids)]
+                        for i, qid in enumerate(query_ids)]
     query_embeds = embedEngine.embed_queries(expanded_queries)
-
-    for qid in task_ids:
-        mark_as_inprogress(qid)
 
     meta_filters = []
     existing_results = {}
-    for qid in task_ids:
+    for qid in query_ids:
         meta_filters.append([])
         if parsed_queries[qid].get('authorName', None):
             meta_filters[-1].append(['authorName',
@@ -156,56 +154,55 @@ async def batch_and_save(raw_payloads):
             meta_filters[-1].append(['publicationDate', 'lte',
                                     parsed_queries[qid]['publicationDate_end']])
         if paperLocks[qid]:
-            existing_results[qid] = load_existing_result(qid)
+            existing_results[qid] = load_existing_result(task_ids[qid])
             meta_filters[-1].append(['paperId', '==',
                                     [pl.get('paperId') for pl in existing_results[qid]]])
             logger.info([pl.get('paperId') for pl in existing_results[qid]])
 
     results = await qdrant.query_batch_streamed(
         query_vectors=query_embeds.tolist(),
-        query_ids=task_ids,
-        topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in task_ids],
+        query_ids=query_ids,
+        topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in query_ids],
         topK_per_paper=search_config["topk_per_article"],
         payload_filters=meta_filters,
         with_vectors=True,
     )
 
-    empty_ids = [qid for qid in task_ids
+    empty_ids = [qid for qid in query_ids
                  if not results.get(qid) or not results[qid].points]
-    task_ids = [qid for qid in task_ids
-                if qid not in empty_ids]
+    query_ids = [qid for qid in query_ids
+                 if qid not in empty_ids]
 
     if empty_ids:
         for qid in empty_ids:
-            append_results(qid, [{"query_id": query_ids[qid]}])
-            mark_as_complete(qid)
+            save_results(f"{task_ids[qid]}/{qid}", [{"query_id": qid}])
         logger.warning(
             f"Skipping reranking for {len(empty_ids)} queries with no Qdrant results: {empty_ids}")
 
-    if not task_ids:
+    if not query_ids:
         logger.warning(
             "No valid task_ids remaining after filtering empty Qdrant results. Exiting.")
         return
 
-    query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(task_ids)
+    query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(query_ids)
                                 if qid not in empty_ids])
-    raw_payloads = [raw_payloads[i] for i, qid in enumerate(task_ids)
+    raw_payloads = [raw_payloads[i] for i, qid in enumerate(query_ids)
                     if qid not in empty_ids]
 
     rerank_query_embeds = rerankEngine(
         query_embeds.unsqueeze(1).to(rerankEngine.device))
     res_embeds_offset = [
-        0] + [len(results[qid].points) for qid in task_ids]
+        0] + [len(results[qid].points) for qid in query_ids]
     res_embeds_offset = np.cumsum(res_embeds_offset)
     rerank_res_embeds = rerankEngine(
-        [torch.tensor(pt.vector) for qid in task_ids for pt in results[qid].points])
+        [torch.tensor(pt.vector) for qid in query_ids for pt in results[qid].points])
 
     rerank_scores = {}
-    for i, qid in enumerate(task_ids):
+    for i, qid in enumerate(query_ids):
         rerank_scores[qid] = rerankEngine.compute_max_sim(
             rerank_query_embeds[i], rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
 
-    for i, qid in enumerate(task_ids):
+    for i, qid in enumerate(query_ids):
         payload = [pt.payload | {'qdrant_score': pt.score,
                                  'rerank_score': rerank_scores[qid][i],
                                  'user_score': None,
@@ -236,7 +233,7 @@ async def batch_and_save(raw_payloads):
             "id": qid,
             "task_id": qid,
             "query": raw_payloads[i]["query"],
-            "query_id": query_ids[qid],
+            "query_id": qid,
             "user_id": raw_payloads[i].get("user_id"),
             "notebook_id": raw_payloads[i].get("notebook_id"),
             "qdrant_model": qdrant.model_name,
@@ -253,9 +250,20 @@ async def batch_and_save(raw_payloads):
         result_json = [{**base_json, **pl} for pl in payload]
 
         # Save to disk
-        append_results(qid, result_json)
-        mark_as_complete(qid)
+        save_results(f"{task_ids[qid]}/{qid}", result_json)
         logger.info(f"Results for {qid} completed")
+
+
+def save_results(search_id: str, result_data: list):
+    users_root = config.USERS_ROOT
+    search_path = os.path.join(users_root, f"{search_id}.json")
+    os.makedirs(os.path.dirname(search_path), exist_ok=True)
+
+    logger.info(f"Search path: {search_path}")
+
+    # Save payload
+    with open(search_path, "w") as f:
+        json.dump(result_data, f)
 
 
 def append_results(task_id: str, result_data: list):

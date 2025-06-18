@@ -186,7 +186,7 @@ export default function ChatApp() {
           }
         }
       }
-      // setPapers([]);
+      setPapers(allPapers);
       if (Array.isArray(data)) {
         const processed = data.map((msg) => {
           if (allPapers.length > 0) {

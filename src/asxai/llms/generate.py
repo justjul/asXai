@@ -12,7 +12,7 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP, ExpandQueryMCP, NotebookTitleMCP, ChatSummarizerMCP
+from .mcp_library import QueryParseMCP, ExpandQueryMCP, KeywordsMCP, NotebookTitleMCP, ChatSummarizerMCP
 from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP
 
 from tqdm import tqdm
@@ -136,14 +136,18 @@ class OllamaManager:
                            genplan_instruct: str = chat_config['instruct_genplan'],
                            **kwargs) -> List[dict]:
 
-        articles_serialized = "- ARTICLES:\n" + '\n'.join(documents)
-        query_serialized = "- QUERY:\n" + query
+        # articles_serialized = "- ARTICLES:\n" + '\n'.join(documents)
+        # query_serialized = "- QUERY:\n" + query
+
+        # instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
+        # prompt = instruct.replace(
+        #     "<QUERY>", articles_serialized + query_serialized)
 
         instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
-        prompt = instruct.replace(
-            "<QUERY>", articles_serialized + query_serialized)
+        prompt = instruct.replace("<QUERY>", query)
 
-        messages = [{'role': 'user', 'content': prompt}]
+        messages = [{'role': 'user', 'content': doc} for doc in documents]
+        messages += [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, **kwargs)
 
@@ -210,6 +214,39 @@ class OllamaManager:
 
         return response
 
+    async def processQuery(self, query: str, chat_history: List[dict],
+                           expand_instruct: str = chat_config['instruct_expand'],
+                           **kwargs):
+        instruct = ExpandQueryMCP.generate_prompt(expand_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        context = [{'role': msg['role'], 'content': msg['content']}
+                   for msg in chat_history]
+        messages = context + [{'role': 'user', 'content': prompt}]
+
+        response = await self.generate(messages=messages, **kwargs)
+        result = ExpandQueryMCP.parse(response)
+
+        logger.info(f"Expand results: {result}")
+
+        queries = result.get('queries', [])
+        search_needed = result.get('search_needed', [])
+
+        # This is a temporary fix before we adjust search strategy with multiple questions:
+        # We concatenate questions to deal with a single search per user's query.
+        queries = [' '.join(queries)]
+
+        results = []
+        if search_needed:
+            for query in queries:
+                payload = await self.keywords(query=query, **kwargs)
+                parsed = await self.parse(query, **kwargs)
+                results.append({**payload, **parsed})
+
+        logger.info(f"Expand + Keywords + Parsed results: {results}")
+
+        return results
+
     async def expand(self, query: str, chat_history: List[dict],
                      expand_instruct: str = chat_config['instruct_expand'],
                      **kwargs):
@@ -221,7 +258,20 @@ class OllamaManager:
         messages = context + [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, **kwargs)
-        result = ExpandQueryMCP.parse(response)
+        results = ExpandQueryMCP.parse(response)
+
+        return results
+
+    async def keywords(self, query: str,
+                       keyword_instruct: str = chat_config['instruct_keyword'],
+                       **kwargs):
+        instruct = KeywordsMCP.generate_prompt(keyword_instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        messages = [{'role': 'user', 'content': prompt}]
+
+        response = await self.generate(messages=messages, **kwargs)
+        result = KeywordsMCP.parse(response)
 
         return result
 
@@ -237,7 +287,6 @@ class OllamaManager:
         response = await self.generate(messages=messages, options={'temperature': 0.0}, **kwargs)
         result = QueryParseMCP.parse(response)
 
-        logger.info(f"Parsed query: {result}")
         result['original_query'] = query
         return result
 

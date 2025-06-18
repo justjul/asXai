@@ -96,21 +96,49 @@ chat:
             Here is the original query:\n
             <QUERY>
   instruct_expand: >
-            You are a scientific query planner and expansion agent.\n
-            Given the full conversation context and the user request, you must extract a search expansion plan.\n
-            Your output must fill the following fields:\n
+            You are a scientific assistant helping users structure their research questions into actionable literature queries.\n
+
+             Given the full conversation context and the user request, you must extract a search expansion plan:\n
+            - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
+            - Indicate whether a scientific article search is needed to address these questions, based on your domain expertise and ethical boundaries.\n
+
+            Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
-            If you can't find answers for a field just fill it with 'null'.\n
+
             Output strictly valid JSON.\n
             Here is the original query:\n
             <QUERY>
+  instruct_keyword: >
+            You are a research assistant helping classify scientific queries.\n
+
+            For the given query:
+            - Identify its broad research field (Computer science, Physics, Biology, or Medicine).
+            - List 3 to 5 main research topics it touches.
+            - List 3 to 5 specific key concepts or methods that are likely central to answering it.
+
+            Output a JSON object with the following fields:
+            <FIELDS>
+
+            Output strictly valid JSON.\n
+            Here is the original query:\n
+            <QUERY>
+
+  # instruct_expand: >
+  #           You are a scientific query planner and expansion agent.\n
+  #           Given the full conversation context and the user request, you must extract a search expansion plan.\n
+  #           Your output must fill the following fields:\n
+  #           <FIELDS>\n\n
+  #           If you can't find answers for a field just fill it with 'null'.\n
+  #           Output strictly valid JSON.\n
+  #           Here is the original query:\n
+  #           <QUERY>
   instruct_genplan: >
             You are a generation planner for scientific answering.\n
             You receive:\n
             - The user's query.\n
             - A list of retrieved articles, each with their article ID, title and author's names.\n
 
-            Your task is to:\n
+             Given the list of retrieved articles provided in the context, your task is to:\n
             1- Break the answer into multiple **sections**
             2- For each section, generate a title and a short description of the scope of this section.\n
             3- Assign relevant paperIds for each section based on their content.\n
@@ -123,7 +151,7 @@ chat:
 
             Limit to 4-8 sections. All sections must include at least one relevant paperId.\n
             Output strictly valid JSON.\n
-            Here below is the list of articles with the query at the end:\n
+            Here below is the user's query:\n
             <QUERY>
   instruct_gensection: >
             You are a scientific writer generating an answer for a scientific section.\n\n

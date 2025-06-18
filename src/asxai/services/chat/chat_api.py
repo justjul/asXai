@@ -284,7 +284,8 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
     user_id = safe_user_id(decoded_token["uid"])
     create_user(user_id)
     task_id = f"{user_id}/{notebook_id}"
-    query_id = req.query_id or hash_id(req.message + str(time.time()))
+    query_id = req.query_id or hash_id(
+        notebook_id + req.message + str(time.time()))
     payload = {
         "task_id": task_id,
         "query_id": query_id,
