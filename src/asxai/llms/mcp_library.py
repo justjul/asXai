@@ -41,7 +41,7 @@ def parse_mcp_response(text: str):
 
         return norm_dic
     except (ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"JSON decoding error: {e}")
+        logger.warning(f"JSON decoding error on {text}: {e}")
         return {}
 
 
@@ -145,7 +145,7 @@ class ExpandQueryMCP(BaseModel):
     research_field: str = Field(description="Relevant fields of research among Computer science, Physics, Biology and Medecine "
                                 + "returned as a list of strings.")
     main_topics: List[str] = Field(
-        description="3-5 topics topics of research related to the user's question, returned as a list of strings.")
+        description="3-5 topics of research related to the user's question, returned as a list of strings.")
     key_concepts: List[str] = Field(
         description="Specific concepts, keywords, or methods relevant to the search, returned as a list of strings.")
     search_needed: bool = Field(

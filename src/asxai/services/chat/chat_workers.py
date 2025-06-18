@@ -11,6 +11,7 @@ import requests
 
 import config
 from asxai.llms import OllamaManager
+from .notebook_manager import NotebookManager
 import torch
 import numpy as np
 import re
@@ -25,12 +26,15 @@ logger = get_logger(__name__, level=config.LOG_LEVEL)
 
 params = load_params()
 chat_config = params["chat"]
+search_config = params["search"]
 
 message_queue = asyncio.Queue()
 cancel_queue = asyncio.Queue()
 async_runner = AsyncRunner()
 SEARCH_HOST = "search-api" if running_inside_docker() else 'localhost'
 SEARCH_PORT = 8000 if running_inside_docker() else 8100
+
+Notebook_manager = NotebookManager(config.USERS_ROOT)
 
 
 def hash_query(text: str) -> str:
@@ -81,11 +85,12 @@ class ChatManager:
         self.model_name = payload.get("model", ollama_manager.model_name)
         self.topK = payload["topK"]
         self.paperLock = payload["paperLock"]
-        self.rephrase_only = payload["rephrase"]
-        self.regenerate = payload["regenerate"]
+        self.mode = payload["mode"]
         self.model_name = ollama_manager.resolve_model(self.model_name)
         self.chat_path = os.path.join(
             config.USERS_ROOT, f"{self.task_id}.chat.json")
+        self.search_path = os.path.join(
+            config.USERS_ROOT, f"{self.task_id}.json")
         self.summaries_path = os.path.join(
             config.USERS_ROOT, f"{self.task_id}.summaries.json")
         self.stream_path = os.path.join(
@@ -94,16 +99,19 @@ class ChatManager:
             stream_file.write("\n")
         os.makedirs(os.path.dirname(self.chat_path), exist_ok=True)
 
-        if self.regenerate:
+        if self.mode in ['regenerate']:
             self.delete_assistant_msg()
+            self.user_message = self.get_user_message()
+            self.delete_user_msg()
 
         ts = self.get_timestamp()
         self.timestamp = ts or time.time()
         self.timestamp_cutoff = ts or 2 * time.time()
-        self.expand_mode = ts and not self.regenerate
-        if self.expand_mode:
+        if ts and self.mode in ['reply']:
+            self.delete_assistant_msg()
+            self.delete_user_msg()
             logger.info(
-                f"Expansion request detected for {self.task_id}/{self.query_id}")
+                f"{self.mode} mode on previous msg for {self.task_id}/{self.query_id}")
 
     def get_timestamp(self):
         if os.path.exists(self.chat_path):
@@ -118,18 +126,45 @@ class ChatManager:
                     f"Failed to estimate timestamp cutoff for {self.task_id}: {e}")
         return None
 
+    def get_user_message(self):
+        if os.path.exists(self.chat_path):
+            try:
+                with open(self.chat_path) as f:
+                    history = json.load(f)
+                    content = next((m.get("content") for m in reversed(history) if m.get(
+                        "query_id") == self.query_id and m.get("role") == 'user'), None)
+                return content
+            except Exception as e:
+                logger.warning(
+                    f"Failed to fetch user's message from chat history for {self.task_id}: {e}")
+        return None
+
     def delete_assistant_msg(self):
         if os.path.exists(self.chat_path):
             try:
                 with open(self.chat_path, "r") as f:
                     history = json.load(f)
                     history = [m for m in history if m.get(
-                        "query_id") != self.query_id or m.get("access") != 'assistant']
+                        "query_id") != self.query_id or m.get("role") != 'assistant']
                 with open(self.chat_path, "w") as f:
                     json.dump(history, f)
             except Exception as e:
                 logger.warning(
-                    f"Failed to load chat context for {self.task_id}: {e}")
+                    f"Failed to delete asistant message from chat context for {self.task_id}: {e}")
+        return []
+
+    def delete_user_msg(self):
+        if os.path.exists(self.chat_path):
+            try:
+                with open(self.chat_path, "r") as f:
+                    history = json.load(f)
+                    history = [m for m in history if m.get(
+                        "query_id") != self.query_id or m.get("role") != 'user']
+                with open(self.chat_path, "w") as f:
+                    json.dump(history, f)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete user's message from chat context for {self.task_id}: {e}")
         return []
 
     def load_chat_history(self):
@@ -239,7 +274,7 @@ class ChatManager:
             json.dump(new_data, f)
 
     async def update_summaries(self, history, summaries):
-        if self.expand_mode:
+        if self.mode in ["expand", "regenerate"]:
             return []
         if summaries:
             last_summary_date = summaries[-1].get("timestamp", 0)
@@ -278,38 +313,23 @@ class ChatManager:
         if os.path.isfile(self.stream_path):
             os.remove(self.stream_path)
 
-    def chat_cleanup(self):
-        if not os.path.isfile(self.chat_path):
-            return 0
-
-        with open(self.chat_path, "r") as f:
-            history = json.load(f)
-
-        all_query_ids = [m.get("query_id") for m in history if m.get(
-            "role") == "assistant"]
-        new_history = [m for m in history if m.get(
-            "query_id") in all_query_ids]
-
-        with open(self.chat_path, "w") as f:
-            json.dump(new_history, f)
-
-        return len(history) - len(new_history)
-
-    def submit_search(self, query: str, topK: int, paperLock: bool):
+    def submit_search(self, prefix_id: int, query: str, topK: int, paperLock: bool):
+        search_query_id = str(prefix_id).strip('_') + '_' + self.query_id
         SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
         payload = {
             "user_id": self.user_id,
             "notebook_id": self.notebook_id,
-            "query_id": self.query_id,
+            "query_id": search_query_id,
             "query": query,
             "topK": topK,
             "paperLock": paperLock,
         }
         res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
 
-    def load_search_result(self, topK: int):
+    def load_search_result(self, prefix_id: int):
+        search_query_id = str(prefix_id).strip('_') + '_' + self.query_id
         SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
-        timeout = 15
+        timeout = search_config['timeout']
         endtime = time.time() + timeout
         try:
             while True:
@@ -317,7 +337,7 @@ class ChatManager:
                     res = requests.get(
                         f"{SEARCH_API_URL}/search/{self.task_id}").json()
                     res = res['notebook']
-                    if (res and self.query_id in {r['query_id'] for r in res[-5:]}):
+                    if (res and search_query_id in {r['query_id'] for r in res}):
                         break
                 except Exception as e:
                     logger.warning(
@@ -325,16 +345,11 @@ class ChatManager:
                 if time.time() > endtime:
                     break
 
-            results = []
-            match_generator = (
-                pl for pl in res if pl['query_id'] == self.query_id)
-            while len(results) < topK:
-                try:
-                    results.append(next(match_generator))
-                except StopIteration:
-                    break
+            papers = [
+                pl for pl in res if pl['query_id'] == search_query_id and pl.get('paperId')
+            ]
 
-            for paper in results:
+            for paper in papers:
                 if paper['openAccessPdf'].startswith("gs://"):
                     arxiv_id = paper['openAccessPdf'].rsplit("/", 1)[-1][:-4]
                     arxiv_id = re.sub(r"v\d+$", "", arxiv_id)
@@ -344,17 +359,15 @@ class ChatManager:
             logger.error(
                 f"Unable to load search result for {self.task_id}: {e}")
 
-        return results
+        return papers
 
 
 async def ollama_chat(payload, ollama_manager):
     try:
         task_id = payload["task_id"]
-        user_message = payload["content"]
         model_name = payload.get("model", ollama_manager.model_name)
         topK = payload["topK"]
         paperLock = payload["paperLock"]
-        rephrase_only = payload["rephrase"]
         model_name = ollama_manager.resolve_model(model_name)
 
         chat_manager = ChatManager(payload, ollama_manager)
@@ -376,15 +389,16 @@ async def ollama_chat(payload, ollama_manager):
         async_runner.submit(chat_manager.update_summaries(history, summaries))
 
         if not context:
-            title_response = await ollama_manager.generateTitle(query=user_message)
+            title_response = await ollama_manager.generateTitle(query=chat_manager.user_message)
             notebook_title = title_response['title']
         else:
-            notebook_title = context[-1].get('notebook_title', user_message)
+            notebook_title = context[-1].get('notebook_title',
+                                             chat_manager.user_message)
 
-        if not chat_manager.expand_mode:
+        if chat_manager.mode in ["reply", "regenerate"]:
             startime = time.time()
             chat_manager.stream(" *Expanding* ")
-            expanded_query = await ollama_manager.expand(query=user_message,
+            expanded_query = await ollama_manager.expand(query=chat_manager.user_message,
                                                          chat_history=context)
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
@@ -400,12 +414,13 @@ async def ollama_chat(payload, ollama_manager):
                 startime = time.time()
                 chat_manager.stream(" *Searching* ")
                 chat_manager.submit_search(
+                    prefix_id=0,
                     query={'query': parsed_search_query.get('cleaned_query'),
                            **payload_filters, },
                     topK=topK, paperLock=paperLock
                 )
 
-                papers = chat_manager.load_search_result(topK=topK)
+                papers = chat_manager.load_search_result(prefix_id=0)
 
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
             else:
@@ -419,7 +434,7 @@ async def ollama_chat(payload, ollama_manager):
                 )
 
             chat_manager.save_chat_msg(
-                role="user", content=user_message,
+                role="user", content=chat_manager.user_message,
                 model=model_name, papers=papers,
                 access="all", notebook_title=notebook_title,
                 expanded_query=expanded_query,
@@ -431,14 +446,14 @@ async def ollama_chat(payload, ollama_manager):
 
         ollama_streamers = []
 
-        if not chat_manager.expand_mode:
+        if chat_manager.mode in ["reply", "regenerate"]:
             ollama_streamers.append(
                 ollama_manager.generateQuickReply(query=expanded_query['query'],
                                                   documents=serialize_documents(papers))
             )
             sections = [{"title": '', }]
             abstract = []
-        else:
+        elif chat_manager.mode in ["expand"]:
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
             generationPlan = await ollama_manager.generatePlan(query=expanded_query['query'],
@@ -513,7 +528,8 @@ async def ollama_chat(payload, ollama_manager):
 
     finally:
         chat_manager.delete_stream()
-        chat_manager.chat_cleanup()
+        await Notebook_manager.chat_cleanup(task_id)
+        await Notebook_manager.search_cleanup(task_id)
 
     return full_response
 

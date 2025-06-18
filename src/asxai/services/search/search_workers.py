@@ -139,6 +139,9 @@ async def batch_and_save(raw_payloads):
                         for i, qid in enumerate(task_ids)]
     query_embeds = embedEngine.embed_queries(expanded_queries)
 
+    for qid in task_ids:
+        mark_as_inprogress(qid)
+
     meta_filters = []
     existing_results = {}
     for qid in task_ids:
@@ -174,6 +177,7 @@ async def batch_and_save(raw_payloads):
 
     if empty_ids:
         for qid in empty_ids:
+            append_results(qid, [{"query_id": query_ids[qid]}])
             mark_as_complete(qid)
         logger.warning(
             f"Skipping reranking for {len(empty_ids)} queries with no Qdrant results: {empty_ids}")
@@ -269,6 +273,8 @@ def append_results(task_id: str, result_data: list):
             existing_data = []
     else:
         existing_data = []
+
+    logger.info(f"existing search data: {existing_data}")
 
     # Append new result
     existing_data.extend(result_data)

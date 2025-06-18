@@ -186,7 +186,7 @@ export default function ChatApp() {
           }
         }
       }
-      setPapers([]);
+      // setPapers([]);
       if (Array.isArray(data)) {
         const processed = data.map((msg) => {
           if (allPapers.length > 0) {
@@ -292,7 +292,6 @@ export default function ChatApp() {
   };
 
   const sendRephrase = async () => {
-    await deleteChatfrom(rephrasingMsg, true);
     handleSubmit(rephrasingContent, true);
     cancelRephrase();
     // 🔧 Optional: persist edit to backend here
@@ -308,9 +307,8 @@ export default function ChatApp() {
     setEditContent("");
   };
 
-  const sendEdit = async () => {
-    await deleteChatfrom(editingMsg);
-    handleSubmit(editContent);
+  const sendEdit = async (id) => {
+    handleSubmit(editContent, id);
     cancelEdit();
     // 🔧 Optional: persist edit to backend here
   };
@@ -333,20 +331,22 @@ export default function ChatApp() {
     }
   };
 
-  const handleSubmit = async (editedQuestion = null, rephrasing = false) => {
+  const handleSubmit = async (editedQuestion = null, query_id = null, mode = 'reply') => {
     const finalQuestion = editedQuestion ?? question;
-    if (!finalQuestion.trim()) return;
+    if (!finalQuestion.trim() && !query_id) return;
+    console.log(query_id)
     let queryId;
+    console.log(query_id)
     try {
       const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({
-          message: finalQuestion, 
-          notebook_id: `${notebookId}`, 
+          message: finalQuestion,
+          query_id, 
           topK: topK,
           paperLock: lockArticleList,
-          rephrase: rephrasing}),
+          mode: mode}),
       });
       if (!res.ok) throw new Error('Failed to submit chat message');
       const data = await res.json();
@@ -355,34 +355,24 @@ export default function ChatApp() {
       console.error('Failed to submit chat message:', err);
       return;
     }
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: finalQuestion, query_id: queryId },
-      { role: 'assistant', content: '', query_id: queryId },
-    ]);
-    setQuestion('');
-    streamAnswer(notebookId, queryId);
-  };
 
-  const handleExpand = async (query_id) => {
-    try {
-      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/expand`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query_id: `${query_id}`, 
-          notebook_id: `${notebookId}`, 
-          topK: topK,
-          paperLock: lockArticleList}),
-      });
-
-      if (!res.ok) throw new Error("Failed to trigger expansion");
-      const data = await res.json();
-      streamAnswer(notebookId, data.query_id);
-
-    } catch (err) {
-      console.error("Expand failed:", err);
+    if (finalQuestion.trim()) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: finalQuestion, query_id: queryId },
+      ]);
+      setQuestion('');
     }
+
+    if (mode !== 'regenerate' && mode !== 'edit') {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: '', query_id: queryId },
+      ]);
+      setQuestion('');
+    }
+
+    streamAnswer(notebookId, queryId);
   };
 
   const streamAnswer = async (notebookId, query_id) => {
@@ -707,7 +697,7 @@ export default function ChatApp() {
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                  src={leftCollapsed ? "/notebook_closed_icon.svg" : "/notebook_open_icon.svg"}
+                  src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
                   alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                   style={{
                     height: '1.7em', // or adjust as needed for your top bar
@@ -742,7 +732,7 @@ export default function ChatApp() {
                   title="New notebook"
                 >
                   <img
-                    src= "/notebook_add_icon.svg"
+                    src= "/book_add_icon.svg"
                     alt= "New notebook"
                     style={{
                       height: '1.7em', // or adjust as needed for your top bar
@@ -989,7 +979,7 @@ export default function ChatApp() {
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                src={leftCollapsed ? "/notebook_closed_icon.svg" : "/notebook_open_icon.svg"}
+                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
                 alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                 style={{
                   height: '1.7em', // or adjust as needed for your top bar
@@ -1037,6 +1027,32 @@ export default function ChatApp() {
           </div>
           {/* Right: collapse right sidebar */}
           <div style={{ flex: 1, display: "flex", justifyContent: "flex-end", paddingRight: "1rem" }}>
+            {rightCollapsed && (
+              <button
+              onClick={() => setLockArticleList((c) => !c)}
+              style={{
+                border: lockArticleList ? '1px solid rgb(236, 116, 230)' : 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: '1.3rem',
+                padding: '0.5rem',
+                borderRadius: '50%',
+              }}
+              title={lockArticleList ? "Unlock Article List" : "Lock Article List"}
+            >
+              <img
+                src={lockArticleList ? "/lock_closed_icon.svg" : "/lock_open_icon.svg"}
+                alt={lockArticleList ? "Locked articles icon" : "Unlocked articles icon"}
+                style={{
+                  height: '1.7em', // or adjust as needed for your top bar
+                  width: '1.7em',
+                  display: 'block',
+                  margin: '0.5 rem',
+                  pointerEvents: 'none', // so clicks reach the button
+                }}
+              />
+            </button>
+            )}
             {rightCollapsed && (
               <button
               onClick={() => setRightCollapsed((c) => !c)}
@@ -1109,7 +1125,7 @@ export default function ChatApp() {
                     style={{ width: '100%', minHeight: '5rem' }}
                   />
                   <div style={{ marginTop: '0.5rem', textAlign: 'right' }}>
-                    <button onClick={() => sendEdit()}>Send</button>
+                    <button onClick={() => sendEdit(msg.query_id)}>Send</button>
                     <button onClick={() => cancelEdit()}>Cancel</button>
                   </div>
                 </div>
@@ -1176,7 +1192,7 @@ export default function ChatApp() {
               {msg.query_id && (
                 <div style={{
                   position: 'absolute',
-                  bottom: '10px',
+                  bottom: '5px',
                   right: '10px',
                   display: 'flex',
                   gap: '0.5rem',
@@ -1185,12 +1201,12 @@ export default function ChatApp() {
                     <span
                       style={{
                         cursor: 'pointer',
-                        fontSize: '1.3em',
+                        fontSize: '0.8em',
                         color: 'blue',
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleExpand(msg.query_id);
+                        handleSubmit("", msg.query_id, 'expand');
                       }}
                       title="More detail"
                     >
@@ -1198,31 +1214,33 @@ export default function ChatApp() {
                     </span>
                   }
 
-                  <span
-                    style={{
-                      cursor: 'pointer',
-                      fontSize: '1.3em',
-                      color: 'orange',
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (msg.role === 'user') {
-                        cancelRephrase()
-                        handleEdit(msg);
-                      } else if (msg.role === 'assistant') {
-                        cancelEdit()
-                        handleRephrase(msg);
-                      }
-                    }}
-                    title="Edit message"
-                  >
-                    ✏️
-                  </span>
+                  {msg.role === 'user' &&
+                    <span
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                        color: 'orange',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (msg.role === 'user') {
+                          cancelRephrase()
+                          handleEdit(msg);
+                        } else if (msg.role === 'assistant') {
+                          cancelEdit()
+                          handleRephrase(msg);
+                        }
+                      }}
+                      title="Edit message"
+                    >
+                      ✏️
+                    </span>
+                  }
 
                   <span
                     style={{
                       cursor: 'pointer',
-                      fontSize: '1.3em',
+                      fontSize: '0.8em',
                       color: 'red',
                     }}
                     onClick={(e) => {
@@ -1354,7 +1372,7 @@ export default function ChatApp() {
               style={{
                 fontSize: '1.25rem',
                 fontWeight: 'bold',
-                color: lockArticleList ? 'rgb(247, 85, 239)' : 'var(--main-font-color)',
+                color: 'var(--main-font-color)',
                 fontFamily: 'var(--main-font)',
                 }}>
               Top Articles
@@ -1403,7 +1421,7 @@ export default function ChatApp() {
               display: 'flex', 
               marginRight: '1%', 
               gap: '0rem',
-              color: lockArticleList ? 'rgb(247, 85, 239)' : 'var(--main-font-color)',
+              color: 'var(--main-font-color)',
               fontFamily: 'var(--main-font)',
               }}>
               <label htmlFor="topK">TopK:</label>

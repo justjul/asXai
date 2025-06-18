@@ -264,11 +264,11 @@ Notebook_manager = NotebookManager(config.USERS_ROOT)
 
 class ChatRequest(BaseModel):
     message: str
+    query_id: Optional[str] = None
     model: str = "default"
     topK: int = search_config["topk_rerank"]
     paperLock: bool = False
-    rephrase: bool = False
-    regenerate: bool = False
+    mode: str = "reply"
 
 
 class ExpandRequest(BaseModel):
@@ -276,8 +276,7 @@ class ExpandRequest(BaseModel):
     model: str = "default"
     topK: int = search_config["topk_rerank"]
     paperLock: bool = False
-    rephrase: bool = False
-    regenerate: bool = False
+    mode: str = "reply"
 
 
 @app.post("/notebook/{notebook_id}/chat")
@@ -285,7 +284,7 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
     user_id = safe_user_id(decoded_token["uid"])
     create_user(user_id)
     task_id = f"{user_id}/{notebook_id}"
-    query_id = hash_id(req.message + str(time.time()))
+    query_id = req.query_id or hash_id(req.message + str(time.time()))
     payload = {
         "task_id": task_id,
         "query_id": query_id,
@@ -296,8 +295,7 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
         "model": req.model,
         "topK": req.topK,
         "paperLock": req.paperLock,
-        "rephrase": req.rephrase,
-        "regenerate": req.regenerate,
+        "mode": req.mode,
         "timestamp": time.time(),
         "done": 0
     }
@@ -411,7 +409,7 @@ async def abort_generation(notebook_id: str, decoded_token: dict = Depends(verif
 
 
 @app.get("/notebook/{notebook_id}/chat/final")
-def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)):
+async def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
@@ -420,7 +418,7 @@ def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        history = Notebook_manager.load_history(task_id)
+        history = await Notebook_manager.load_history(task_id)
 
         endtime = time.time() + 10  # timeout after 10 seconds
         user_msg, assistant_msg = None, None
@@ -465,7 +463,7 @@ def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_token)
 
 
 @app.get("/notebook/{notebook_id}/content/{query_id}")
-def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
+async def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
@@ -474,7 +472,7 @@ def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        query_msg = Notebook_manager.load_query(task_id, query_id)
+        query_msg = await Notebook_manager.load_query(task_id, query_id)
 
         if not query_msg:
             raise HTTPException(
@@ -526,7 +524,7 @@ def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(
 
 
 @app.delete("/notebook/{notebook_id}/content/{query_id}")
-def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
+async def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
@@ -535,7 +533,7 @@ def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depen
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        diff = Notebook_manager.delete_query(task_id, query_id)
+        diff = await Notebook_manager.delete_query(task_id, query_id)
 
         if diff == 0:
             # Nothing was deleted
@@ -551,7 +549,7 @@ def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = Depen
 
 
 @app.patch("/notebook/{notebook_id}/back/{query_id}")
-def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: bool = False, decoded_token: dict = Depends(verify_token)):
+async def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: bool = False, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
@@ -560,7 +558,7 @@ def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: bool = Fa
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        diff = Notebook_manager.delete_queries_from(
+        diff = await Notebook_manager.delete_queries_from(
             task_id, query_id, keepUserMsg)
 
         if diff == 0:
@@ -576,7 +574,7 @@ def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: bool = Fa
 
 
 @app.get("/notebook/{notebook_id}/papers/{query_id}")
-def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
+async def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
@@ -585,7 +583,7 @@ def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict = Depen
         raise HTTPException(status_code=404, detail="Chat history not found.")
 
     try:
-        history = Notebook_manager.load_history(task_id)
+        history = await Notebook_manager.load_history(task_id)
 
         endtime = time.time() + 10  # timeout after 10 seconds
         user_msg, papers = None, None
@@ -620,11 +618,11 @@ def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict = Depen
 
 
 @app.get("/notebook/{notebook_id}/chat/history")
-def get_history(notebook_id: str, decoded_token: dict = Depends(verify_token)):
+async def get_history(notebook_id: str, decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
-    history = Notebook_manager.load_history(task_id)
+    history = await Notebook_manager.load_history(task_id)
     history = [m for m in history if m.get("access") == 'all']
 
     return history
@@ -647,7 +645,7 @@ async def rename_notebook(notebook_id: str, new_title: str, decoded_token: dict 
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
-    Notebook_manager.rename(task_id, new_title)
+    await Notebook_manager.rename(task_id, new_title)
 
     return {"task_id": task_id, "notebook_id": notebook_id, "notebook_title": new_title}
 
@@ -657,7 +655,7 @@ async def delete_notebook(notebook_id: str, decoded_token: dict = Depends(verify
     user_id = safe_user_id(decoded_token["uid"])
     task_id = f"{user_id}/{notebook_id}"
 
-    Notebook_manager.delete(task_id)
+    await Notebook_manager.delete(task_id)
 
     return {"task_id": task_id, "notebook_id": notebook_id}
 
@@ -665,7 +663,8 @@ async def delete_notebook(notebook_id: str, decoded_token: dict = Depends(verify
 @app.get("/notebook")
 async def get_user_notebooks(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
-    return Notebook_manager.list(user_id)
+    notebook_list = await Notebook_manager.list(user_id)
+    return notebook_list
 
 
 @app.get("/notebook/new_task_id")

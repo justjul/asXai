@@ -14,13 +14,13 @@ class NotebookManager:
     def get_stream_path(self, task_id):
         return os.path.join(self.users_root, f"{task_id}.chat.json")
 
-    def get_result_path(self, task_id):
+    def get_search_path(self, task_id):
         return os.path.join(self.users_root, f"{task_id}.json")
 
     def get_summaries_path(self, task_id):
         return os.path.join(self.users_root, f"{task_id}.summaries.json")
 
-    def list(self, user_id):
+    async def list(self, user_id):
         user_dir = os.path.join(self.users_root, user_id)
         if not os.path.exists(user_dir):
             return []
@@ -43,7 +43,7 @@ class NotebookManager:
         notebooks.sort(key=lambda x: x['date'], reverse=True)
         return notebooks
 
-    def rename(self, task_id, new_title):
+    async def rename(self, task_id, new_title):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return []
@@ -62,21 +62,22 @@ class NotebookManager:
 
         return {"task_id": task_id, "notebook_title": new_title}
 
-    def delete(self, task_id):
+    async def delete(self, task_id):
         chat_path = self.get_chat_path(task_id)
-        search_path = self.get_result_path(task_id)
+        search_path = self.get_search_path(task_id)
         summaries_path = self.get_summaries_path(task_id)
+        stream_path = self.get_stream_path(task_id)
         if os.path.isfile(chat_path):
             os.remove(chat_path)
         if os.path.isfile(search_path):
             os.remove(search_path)
         if os.path.isfile(summaries_path):
             os.remove(summaries_path)
-        if os.path.isfile(self.stream_path):
-            os.remove(summaries_path)
+        if os.path.isfile(stream_path):
+            os.remove(stream_path)
         return {"task_id": task_id, "status": 'deleted'}
 
-    def load_history(self, task_id):
+    async def load_history(self, task_id):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return []
@@ -84,7 +85,7 @@ class NotebookManager:
         with open(chat_path, "r") as f:
             return json.load(f)
 
-    def load_query(self, task_id, query_id):
+    async def load_query(self, task_id, query_id):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return []
@@ -94,7 +95,7 @@ class NotebookManager:
 
         return [m for m in history if m.get("query_id") == query_id]
 
-    def delete_query(self, task_id, query_id):
+    async def delete_query(self, task_id, query_id):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return 0
@@ -107,9 +108,11 @@ class NotebookManager:
         with open(chat_path, "w") as f:
             json.dump(new_history, f)
 
+        self.search_cleanup(task_id)
+
         return len(history) - len(new_history)
 
-    def delete_queries_from(self, task_id, query_id, keepUserMsg: bool = False):
+    async def delete_queries_from(self, task_id, query_id, keepUserMsg: bool = False):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
             return 0
@@ -129,4 +132,50 @@ class NotebookManager:
         with open(chat_path, "w") as f:
             json.dump(new_history, f)
 
+        self.search_cleanup(task_id)
+
         return len(history) - len(new_history)
+
+    async def chat_cleanup(self, task_id):
+        chat_path = self.get_chat_path(task_id)
+        if not os.path.isfile(chat_path):
+            return 0
+
+        with open(chat_path, "r") as f:
+            chat_history = json.load(f)
+
+        all_query_ids = [m.get("query_id") for m in chat_history if m.get(
+            "role") == "assistant"]
+        new_chat_history = [m for m in chat_history if m.get(
+            "query_id") in all_query_ids]
+
+        with open(chat_path, "w") as f:
+            json.dump(new_chat_history, f)
+
+        return len(chat_history) - len(new_chat_history)
+
+    async def search_cleanup(self, task_id):
+        chat_path = self.get_chat_path(task_id)
+        if not os.path.isfile(chat_path):
+            return 0
+
+        search_path = self.get_search_path(task_id)
+        if not os.path.isfile(search_path):
+            return 0
+
+        with open(chat_path, "r") as f:
+            chat_history = json.load(f)
+
+        all_query_ids = [m.get("query_id") for m in chat_history if m.get(
+            "role") == "assistant"]
+
+        with open(search_path, "r") as f:
+            search_history = json.load(f)
+
+        new_search_history = [pl for pl in search_history if pl.get(
+            "query_id", '').strip('_', 1)[-1] in all_query_ids]
+
+        with open(search_path, "w") as f:
+            json.dump(new_search_history, f)
+
+        return len(search_history) - len(new_search_history)
