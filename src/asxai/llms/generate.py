@@ -234,14 +234,14 @@ class OllamaManager:
 
         # This is a temporary fix before we adjust search strategy with multiple questions:
         # We concatenate questions to deal with a single search per user's query.
-        queries = [' '.join(queries)]
+        query_to_parse = ' '.join(queries)
 
         results = []
         if search_needed:
-            for query in queries:
-                payload = await self.keywords(query=query, **kwargs)
-                parsed = await self.parse(query, **kwargs)
-                results.append({**payload, **parsed})
+            payload = await self.keywords(query=query_to_parse, **kwargs)
+            parsed = await self.parse(query_to_parse, **kwargs)
+
+        results = {"queries": queries, **payload, **parsed}
 
         logger.info(f"Expand + Keywords + Parsed results: {results}")
 
@@ -287,7 +287,6 @@ class OllamaManager:
         response = await self.generate(messages=messages, options={'temperature': 0.0}, **kwargs)
         result = QueryParseMCP.parse(response)
 
-        result['original_query'] = query
         return result
 
     async def expand_parse(self,

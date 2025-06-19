@@ -128,7 +128,7 @@ async def batch_and_save(raw_payloads):
     print(raw_payloads)
     query_ids = {pl["query_id"]
                  for pl in raw_payloads}
-    parsed_queries = {pl["query_id"]: pl["query"] for pl in raw_payloads}
+    search_queries = {pl["query_id"]: pl["query"] for pl in raw_payloads}
     task_ids = {pl["query_id"]: pl["task_id"]
                 for pl in raw_payloads}
     topKs = {pl["query_id"]: pl["topK"]
@@ -136,23 +136,36 @@ async def batch_and_save(raw_payloads):
     paperLocks = {pl["query_id"]: pl["paperLock"]
                   for pl in raw_payloads}
 
-    expanded_queries = [parsed_queries[qid].get('query')
-                        for i, qid in enumerate(query_ids)]
-    query_embeds = embedEngine.embed_queries(expanded_queries)
+    # expanding query_ids and queries for batch embeddings
+    expanded_query_ids = [
+        qid for qid in query_ids for _ in search_queries[qid].get('queries')
+    ]
+    expanded_queries = [
+        q for qid in query_ids for q in search_queries[qid].get('queries')
+    ]
+    q_embeds = embedEngine.embed_queries(expanded_queries)
+
+    r_embeds = rerankEngine(q_embeds.unsqueeze(1).to(rerankEngine.device))
+
+    # Reconstructing list of embeddings per query_id
+    query_embeds, rerank_embeds = {}, {}
+    for qid, q_emb, r_emb in zip(expanded_query_ids, q_embeds.tolist(), r_embeds):
+        query_embeds.setdefault(qid, []).append(q_emb)
+        rerank_embeds.setdefault(qid, []).append(r_emb)
 
     meta_filters = []
     existing_results = {}
     for qid in query_ids:
         meta_filters.append([])
-        if parsed_queries[qid].get('authorName', None):
+        if search_queries[qid].get('authorName', None):
             meta_filters[-1].append(['authorName',
-                                    '==', parsed_queries[qid]['authorName']])
-        if parsed_queries[qid].get('publicationDate_start', None):
+                                    '==', search_queries[qid]['authorName']])
+        if search_queries[qid].get('publicationDate_start', None):
             meta_filters[-1].append(['publicationDate', 'gte',
-                                    parsed_queries[qid]['publicationDate_start']])
-        if parsed_queries[qid].get('publicationDate_end', None):
+                                    search_queries[qid]['publicationDate_start']])
+        if search_queries[qid].get('publicationDate_end', None):
             meta_filters[-1].append(['publicationDate', 'lte',
-                                    parsed_queries[qid]['publicationDate_end']])
+                                    search_queries[qid]['publicationDate_end']])
         if paperLocks[qid]:
             existing_results[qid] = load_existing_result(task_ids[qid])
             meta_filters[-1].append(['paperId', '==',
@@ -160,7 +173,7 @@ async def batch_and_save(raw_payloads):
             logger.info([pl.get('paperId') for pl in existing_results[qid]])
 
     results = await qdrant.query_batch_streamed(
-        query_vectors=query_embeds.tolist(),
+        query_vectors=[query_embeds[qid] for qid in query_ids],
         query_ids=query_ids,
         topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in query_ids],
         topK_per_paper=search_config["topk_per_article"],
@@ -184,30 +197,35 @@ async def batch_and_save(raw_payloads):
             "No valid task_ids remaining after filtering empty Qdrant results. Exiting.")
         return
 
-    query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(query_ids)
-                                if qid not in empty_ids])
+    # query_embeds = torch.stack([query_embeds[i] for i, qid in enumerate(query_ids)
+    #                             if qid not in empty_ids])
     raw_payloads = [raw_payloads[i] for i, qid in enumerate(query_ids)
                     if qid not in empty_ids]
 
-    rerank_query_embeds = rerankEngine(
-        query_embeds.unsqueeze(1).to(rerankEngine.device))
+    # rerank_query_embeds = rerankEngine(
+    #     query_embeds.unsqueeze(1).to(rerankEngine.device))
     res_embeds_offset = [
         0] + [len(results[qid].points) for qid in query_ids]
     res_embeds_offset = np.cumsum(res_embeds_offset)
     rerank_res_embeds = rerankEngine(
         [torch.tensor(pt.vector) for qid in query_ids for pt in results[qid].points])
 
+    # rerank_scores = {}
+    # for i, qid in enumerate(query_ids):
+    #     rerank_scores[qid] = rerankEngine.compute_max_sim(
+    #         rerank_query_embeds[i], rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
+
     rerank_scores = {}
     for i, qid in enumerate(query_ids):
         rerank_scores[qid] = rerankEngine.compute_max_sim(
-            rerank_query_embeds[i], rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
+            torch.stack(rerank_embeds[qid], dim=1), rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
 
     for i, qid in enumerate(query_ids):
-        payload = [pt.payload | {'qdrant_score': pt.score,
-                                 'rerank_score': rerank_scores[qid][i],
+        payload = [pt.payload | {'qdrant_score': pt.score / len(query_embeds[qid]),
+                                 'rerank_score': rerank_scores[qid][k] / len(query_embeds[qid]),
                                  'user_score': None,
                                  }
-                   for i, pt in enumerate(results[qid].points)]
+                   for k, pt in enumerate(results[qid].points)]
         for pl in payload:
             pl['main_text'] = []
 
@@ -240,10 +258,10 @@ async def batch_and_save(raw_payloads):
             "rerank_model": rerank_version_date,
             "blend_weights": blendscorer.weights,
             "timestamp": time.time(),
-            "parsed_query": {"query": parsed_queries[qid].get("query"),
-                             "authorName": parsed_queries[qid].get("authorName"),
-                             "publicationDate_start": parsed_queries[qid].get("publicationDate_start"),
-                             "publicationDate_end": parsed_queries[qid].get("publicationDate_end")},
+            "parsed_query": {"query": search_queries[qid].get("query"),
+                             "authorName": search_queries[qid].get("authorName"),
+                             "publicationDate_start": search_queries[qid].get("publicationDate_start"),
+                             "publicationDate_end": search_queries[qid].get("publicationDate_end")},
             "query_embedding": []  # query_embeds[i].tolist()
         }
 

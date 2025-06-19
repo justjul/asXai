@@ -297,7 +297,7 @@ class QdrantManager:
                 await asyncio.gather(*tasks)
 
     async def query(self,
-                    query_vector: List[float],
+                    query_vector: Union[List[float], List[List[float]]],
                     topK: int = 5,
                     topK_per_paper: int = 5,
                     payload_filter: Union[dict, None] = None,
@@ -324,7 +324,8 @@ class QdrantManager:
 
             chunk_results = await self.client.query_points_groups(
                 collection_name=self.collection_name_chunks,
-                query=query_vector,
+                # [0] as temporary fix: chunk coollection should also be defined as multivector to make it simpler
+                query=query_vector[0],
                 query_filter=query_filter,
                 group_by="paperIdQ",
                 limit=topK,  # Max amount of groups
@@ -343,7 +344,7 @@ class QdrantManager:
         return results
 
     async def query_batch_streamed(self,
-                                   query_vectors: List[List[float]],
+                                   query_vectors: Union[List[List[float]], List[List[List[float]]]],
                                    query_ids: List[int] = None,
                                    topKs: List[int] = None,
                                    topK_per_paper: int = 5,

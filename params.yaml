@@ -100,7 +100,8 @@ chat:
 
              Given the full conversation context and the user request, you must extract a search expansion plan:\n
             - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
-            - Indicate whether a scientific article search is needed to address these questions, based on your domain expertise and ethical boundaries.\n
+            - Indicate whether a scientific article search is needed to address these questions, based on ethical boundaries 
+            or on whether the current context of the conversation is sufficient to answer the user's query accurately.\n
 
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n

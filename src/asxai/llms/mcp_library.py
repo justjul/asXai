@@ -99,7 +99,6 @@ class ChatSummarizerMCP(BaseModel):
 
 
 class QueryParseMCP(BaseModel):
-    query: Optional[str] = Field(description="The core search query")
     authorName: Optional[str] = Field(
         description="Author lastname(s) if specified")
     publicationDate_start: Optional[str] = Field(
@@ -122,7 +121,6 @@ class QueryParseMCP(BaseModel):
     def parse(cls, response):
         res = parse_mcp_response(response)
         key_map = {
-            'query': ['query', 'question'],
             'authorName': ['authorName', 'author', 'name'],
             'publicationDate_start': ['publicationDate_start', 'start'],
             'publicationDate_end': ['publicationDate_end', 'end'],
@@ -163,7 +161,6 @@ class ExpandQueryMCP(BaseModel):
 
 
 class KeywordsMCP(BaseModel):
-    query: str = Field(description="The original query being analyzed.")
     research_field: str = Field(description="Relevant field of research among Computer science, Physics, Biology, or Medicine "
                                 + "returned as a list of strings.")
     main_topics: List[str] = Field(
@@ -183,7 +180,6 @@ class KeywordsMCP(BaseModel):
     def parse(cls, response):
         res = parse_mcp_response(response)
         key_map = {
-            'query': ['question', 'query'],
             'research_field': ['research_field', 'research', 'field', 'discipline', 'domain'],
             'main_topics': ['main_topics', 'main', 'topics'],
             'key_concepts': ['key_concepts', 'key', 'concept'],

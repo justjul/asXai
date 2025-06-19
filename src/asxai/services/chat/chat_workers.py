@@ -410,20 +410,16 @@ async def ollama_chat(payload, ollama_manager):
             if expanded_query:
                 startime = time.time()
                 chat_manager.stream(" *Searching* ")
-                num_search = len(expanded_query)
-                for k, query in enumerate(expanded_query):
-                    chat_manager.submit_search(
-                        prefix_id=k,
-                        query=query,
-                        topK=(topK // num_search + 1), paperLock=paperLock
-                    )
+                chat_manager.submit_search(
+                    prefix_id=0,
+                    query=expanded_query,
+                    topK=topK, paperLock=paperLock
+                )
 
                 papers = []
-                for k, query in enumerate(expanded_query):
-                    search_results = chat_manager.load_search_result(
-                        prefix_id=k)
-                    papers.extend(search_results)
-                    query['paperIds'] = [p['paperId'] for p in search_results]
+                papers = chat_manager.load_search_result(
+                    prefix_id=0)
+                expanded_query['paperIds'] = [p['paperId'] for p in papers]
 
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
@@ -452,7 +448,7 @@ async def ollama_chat(payload, ollama_manager):
 
         if chat_manager.mode in ["reply", "regenerate"]:
             if expanded_query:
-                full_query = ' \n'.join([q['query'] for q in expanded_query])
+                full_query = ' \n'.join(expanded_query['queries'])
             else:
                 full_query = chat_manager.user_message
 
@@ -466,7 +462,7 @@ async def ollama_chat(payload, ollama_manager):
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
             if expanded_query:
-                full_query = ' \n'.join([q['query'] for q in expanded_query])
+                full_query = ' \n'.join(expanded_query['queries'])
             else:
                 full_query = chat_manager.user_message
             generationPlan = await ollama_manager.generatePlan(query=full_query,
