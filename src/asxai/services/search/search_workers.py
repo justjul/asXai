@@ -154,23 +154,29 @@ async def batch_and_save(raw_payloads):
         rerank_embeds.setdefault(qid, []).append(r_emb)
 
     meta_filters = []
-    existing_results = {}
     for qid in query_ids:
         meta_filters.append([])
         if search_queries[qid].get('authorName', None):
             meta_filters[-1].append(['authorName',
-                                    '==', search_queries[qid]['authorName']])
+                                    '==', search_queries[qid]['authorName'].split(',')])
         if search_queries[qid].get('publicationDate_start', None):
             meta_filters[-1].append(['publicationDate', 'gte',
                                     search_queries[qid]['publicationDate_start']])
         if search_queries[qid].get('publicationDate_end', None):
             meta_filters[-1].append(['publicationDate', 'lte',
                                     search_queries[qid]['publicationDate_end']])
+
+        existing_results = load_existing_result(task_ids[qid])
         if paperLocks[qid]:
-            existing_results[qid] = load_existing_result(task_ids[qid])
-            meta_filters[-1].append(['paperId', '==',
-                                    [pl.get('paperId') for pl in existing_results[qid]]])
-            logger.info([pl.get('paperId') for pl in existing_results[qid]])
+            existing_paper_ids = [
+                pl.get('paperId') for pl in existing_results if pl.get('user_score') >= 0]
+            meta_filters[-1].append(['paperId', '==', existing_paper_ids])
+            logger.info([pl.get('paperId') for pl in existing_results])
+
+        trashed_paper_ids = [
+            pl.get('paperId') for pl in existing_results if pl.get('user_score') < 0]
+        meta_filters[-1].append(['paperId', '!=', trashed_paper_ids])
+        logger.info([pl.get('paperId') for pl in trashed_paper_ids])
 
     results = await qdrant.query_batch_streamed(
         query_vectors=[query_embeds[qid] for qid in query_ids],
@@ -223,7 +229,7 @@ async def batch_and_save(raw_payloads):
     for i, qid in enumerate(query_ids):
         payload = [pt.payload | {'qdrant_score': pt.score / len(query_embeds[qid]),
                                  'rerank_score': rerank_scores[qid][k] / len(query_embeds[qid]),
-                                 'user_score': None,
+                                 'user_score': 1,
                                  }
                    for k, pt in enumerate(results[qid].points)]
         for pl in payload:
@@ -233,11 +239,11 @@ async def batch_and_save(raw_payloads):
 
         rerank_version_date = f"{rerankEngine.version}-{rerankEngine.training_date}"
 
-        blendscorer = BlendScorer.load(qid)
+        blendscorer = BlendScorer.load(task_ids[qid])
         trained = blendscorer.fit(payload)
         if trained:
-            blendscorer.save(qid)
-            logger.info(f"blendscorer trained and saved for {qid}")
+            blendscorer.save(task_ids[qid])
+            logger.info(f"blendscorer trained and saved for {task_ids[qid]}")
 
         blended_scores = blendscorer.predict(payload)
         for pl, s in zip(payload, blended_scores):

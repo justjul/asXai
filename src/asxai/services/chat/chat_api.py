@@ -204,19 +204,6 @@ def result_path(task_id: str, inprogress: bool = False) -> str:
     return full_path
 
 
-def delete_task(task_id: str) -> str:
-    chat_path = os.path.join(USERS_ROOT, f"{task_id}.chat.json")
-    search_path = os.path.join(USERS_ROOT, f"{task_id}.json")
-    if os.path.isfile(chat_path):
-        os.remove(chat_path)
-    if os.path.isfile(search_path):
-        os.remove(search_path)
-    res = {"task_id": task_id,
-           "status": 'deleted',
-           }
-    return res
-
-
 def delete_user(user_id: str) -> str:
     user_path = os.path.join(USERS_ROOT, f"{user_id}")
     if os.path.isdir(user_path):
@@ -265,6 +252,7 @@ Notebook_manager = NotebookManager(config.USERS_ROOT)
 class ChatRequest(BaseModel):
     message: str
     query_id: Optional[str] = None
+    search_query: Optional[dict] = None
     model: str = "default"
     topK: int = search_config["topk_rerank"]
     paperLock: bool = False
@@ -292,6 +280,7 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
         "user_id": user_id,
         "notebook_id": notebook_id,
         "content": req.message,
+        "search_query": req.search_query,
         "role": "user",
         "model": req.model,
         "topK": req.topK,
@@ -616,6 +605,25 @@ async def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict =
         logger.error(f"Error loading papers for {task_id}/{query_id}: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to load papers.")
+
+
+@app.patch("/notebook/{notebook_id}/scores/{paperId}")
+async def set_paper_scores(notebook_id: str, paperId: str, scores: dict, decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    try:
+        changedId = await Notebook_manager.set_paper_score(task_id, paperIds=paperId, scores=scores)
+
+        return {
+            "papers": changedId, "scores": scores
+        }
+
+    except Exception as e:
+        logger.error(
+            f"Error setting new scores for paper {paperId} in {task_id}: {e}")
+        raise HTTPException(
+            status_code=500, detail="Failed to set paper scores.")
 
 
 @app.get("/notebook/{notebook_id}/chat/history")

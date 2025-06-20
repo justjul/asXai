@@ -29,12 +29,16 @@ export default function ChatApp() {
   const [topK, setTopK] = useState(5);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [openFilterPanels, setOpenFilterPanels] = useState(new Set());
   const [papers, setPapers] = useState([]);
   const papersLoadingRef = useRef(false);
   const papersRef = useRef([]);
   const [selectedQueryIds, setSelectedQueryIds] = useState(new Set());
-  const [expandedIndexes, setExpandedIndexes] = useState(new Set());
+  const [paperMatchingQuery, setPaperMatchingQuery] = useState(new Set());
+  const [expandExcerptIndexes, setExpandExcerptIndexes] = useState(new Set());
+  const [expandAbstractIndexes, setExpandAbstractIndexes] = useState(new Set());
   const [highlightedPaperIds, setHighlightedPaperIds] = useState(new Set());
+  const [checkingTrash, setCheckingTrash] = useState(false);
   const [notebooks, setNotebooks] = useState([]);
   const [lastNotebookDeleted, setLastNotebookDeleted] = useState([]);
   const lastNotebookCreated = localStorage.getItem("lastNotebookCreated")
@@ -257,6 +261,15 @@ export default function ChatApp() {
     setDropdownOpen(dropdownOpen === id ? null : id);
   };
 
+  const toggleFilterPanel = (queryId) => {
+    setOpenFilterPanels(prev => {
+      const updated = new Set(prev);
+      if (updated.has(queryId)) updated.delete(queryId);
+      else updated.add(queryId);
+      return updated;
+    });
+  };
+
   const renameNotebook = async (id, old_title) => {
     const newTitle = prompt("Enter new notebook title:", old_title);
       if (!newTitle || newTitle.trim() === "") {
@@ -331,7 +344,7 @@ export default function ChatApp() {
     }
   };
 
-  const handleSubmit = async (editedQuestion = null, query_id = null, mode = 'reply') => {
+  const handleSubmit = async (editedQuestion = null, query_id = null, mode = 'reply', search_query = null) => {
     const finalQuestion = editedQuestion ?? question;
     if (!finalQuestion.trim() && !query_id) return;
     console.log(query_id)
@@ -344,6 +357,7 @@ export default function ChatApp() {
         body: JSON.stringify({
           message: finalQuestion,
           query_id, 
+          search_query,
           topK: topK,
           paperLock: lockArticleList,
           mode: mode}),
@@ -506,7 +520,7 @@ export default function ChatApp() {
     }
 
     setSelectedQueryIds(newSelected);
-    setRightCollapsed(false);
+    // setRightCollapsed(false);
 
     // rebuilding `papers` from all selected messages:
     if (newSelected.size === 0) {
@@ -536,7 +550,8 @@ export default function ChatApp() {
     }
 
     setPapers(deduped);
-    setExpandedIndexes(new Set()); // reset any expanded indexes
+    setExpandExcerptIndexes(new Set()); // reset any expanded indexes
+    setExpandAbstractIndexes(new Set());
   };
 
   const deleteQuery = async (query_id) => {
@@ -576,13 +591,25 @@ export default function ChatApp() {
     }
   }
 
-  const toggleExpand = (index) => {
-    setExpandedIndexes(prev => {
+  const toggleExcerptExpand = (paperId) => {
+    setExpandExcerptIndexes(prev => {
       const newSet = new Set(prev);
-      if (newSet.has(index)) {
-        newSet.delete(index);
+      if (newSet.has(paperId)) {
+        newSet.delete(paperId);
       } else {
-        newSet.add(index);
+        newSet.add(paperId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleAbstractExpand = (paperId) => {
+    setExpandAbstractIndexes(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(paperId)) {
+        newSet.delete(paperId);
+      } else {
+        newSet.add(paperId);
       }
       return newSet;
     });
@@ -625,13 +652,32 @@ export default function ChatApp() {
     return text;
   };
 
+
+  const ScorePaper = async (paperId, score) => {
+    try {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/scores/${paperId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify({ user_score: score })
+      });
+
+      if (!res.ok) throw new Error('Failed to delete paper');
+
+      refreshMessages();
+
+    } catch (err) {
+      console.error("Failed to delete paper", err);
+      alert("Failed to delete paper");
+    }
+  }
+
   const allReferencedPapers = useMemo(() => {
     const seen = new Set();
     const all = [];
     for (const msg of messages) {
       if (Array.isArray(msg.papers)) {
         for (const p of msg.papers) {
-          if (!seen.has(p.paperId)) {
+          if (!seen.has(p.paperId) && ((checkingTrash && p.user_score < 0) || (!checkingTrash && p.user_score >= 0))) {
             seen.add(p.paperId);
             all.push(p);
           }
@@ -639,9 +685,39 @@ export default function ChatApp() {
       }
     }
     return all;
-  }, [messages]);
+  }, [messages, checkingTrash]);
 
-  const displayedPapers = selectedQueryIds.size > 0 ? papers : allReferencedPapers;
+  const displayedPapers = useMemo(() => {
+    if (selectedQueryIds.size === 0) {
+      setPaperMatchingQuery(new Set())
+      return allReferencedPapers;
+    }
+
+    const selectedPaperIds = new Set(
+      messages
+      .filter((msg) => selectedQueryIds.has(msg.query_id))
+      .flatMap((msg) =>
+        (msg.papers || []).map((p) => p.paperId)
+      )
+    );
+
+    setPaperMatchingQuery(selectedPaperIds)
+
+    const selected = [];
+    const others = [];
+
+    for (const p of allReferencedPapers) {
+      if (selectedPaperIds.has(p.paperId)) {
+        selected.push(p);
+      } else {
+        others.push(p);
+      }
+    }
+
+    return [...selected, ...others];
+  }, [selectedQueryIds, allReferencedPapers, messages]);
+
+  // const displayedPapers = selectedQueryIds.size > 0 ? papers : allReferencedPapers;
 
   return (
     <div style={{flex: 1, display: 'flex', height: '100dvh', width: '100vw', position: 'relative' }}>
@@ -1093,13 +1169,12 @@ export default function ChatApp() {
           {messages.map((msg, idx) => (
             <div
               key={idx}
-              onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
               style={{
-                position: 'relative',
+                // position: 'relative',
                 background: msg.query_id && selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)' : 'var(--main-fg)',
                 padding: '1rem',
                 borderRadius: '1%',
-                cursor: msg.query_id ? 'pointer' : 'default',
+                cursor: 'default',
                 border: "none",
                 marginLeft: msg.role === 'user' ? '15%' : '5%',
                 marginRight: msg.role === 'user' ? '5%' : '5%',
@@ -1107,16 +1182,24 @@ export default function ChatApp() {
                 marginTop: msg.role === 'user' ? '2%' : '1%',
               }}
             >
-              <strong style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
+              <div 
+                style={{ 
+                  // display: 'flex', 
+                  // alignItems: 'center', 
+                  gap: '0.5em',
+                  cursor:'pointer',
+                }}
+                onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
+              >
                 <img
                   src={msg.role === 'user' ? "/asXai_user_black_icon.svg" : "/asXai_robot_black_icon.svg"}
                   alt={msg.role === 'user' ? "User" : "asXai"}
                   style={{
                     height: '2em',
-                    verticalAlign: 'middle'
+                    verticalAlign: 'middle',
                   }}
                 />
-              </strong>
+              </div>
               {msg.role === 'user' && editingMsg === msg.query_id ? (
                 <div>
                   <textarea
@@ -1191,28 +1274,26 @@ export default function ChatApp() {
 
               {msg.query_id && (
                 <div style={{
-                  position: 'absolute',
-                  bottom: '5px',
-                  right: '10px',
                   display: 'flex',
+                  flexDirection: 'row-reverse',
+                  flex: 2,
                   gap: '0.5rem',
                 }}>
-                  {msg.role === 'assistant' &&
-                    <span
-                      style={{
-                        cursor: 'pointer',
-                        fontSize: '0.8em',
-                        color: 'blue',
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSubmit("", msg.query_id, 'expand');
-                      }}
-                      title="More detail"
-                    >
-                      🔎
-                    </span>
-                  }
+                  <span
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '0.8em',
+                      color: 'red',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteQuery(msg.query_id);
+                    }}
+                    title="Delete message"
+                  >
+                    🗑️
+                  </span>
+
 
                   {msg.role === 'user' &&
                     <span
@@ -1237,20 +1318,178 @@ export default function ChatApp() {
                     </span>
                   }
 
-                  <span
-                    style={{
-                      cursor: 'pointer',
-                      fontSize: '0.8em',
-                      color: 'red',
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteQuery(msg.query_id);
-                    }}
-                    title="Delete message"
-                  >
-                    🗑️
-                  </span>
+                  {msg.search_query && (
+                      <span
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: '0.8em',
+                        }}
+                        onClick={() => toggleFilterPanel(msg.query_id)}
+                        title={openFilterPanels.has(msg.query_id) ? 'Hide filters' : 'Show filters'}
+                      >
+                        {openFilterPanels.has(msg.query_id) ? '▲' : '▼ '}
+                      </span>
+                  )}
+                  {msg.role === 'assistant' &&
+                    <span
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                        color: 'blue',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSubmit("", msg.query_id, 'expand');
+                      }}
+                      title="More detail"
+                    >
+                      🔎
+                    </span>
+                  }
+                </div>
+              )}
+
+
+              {msg.search_query && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  {openFilterPanels.has(msg.query_id) && (
+                    <div style={{
+                      backgroundColor: selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)' : 'var(--main-fg)',
+                      border: '1px solid var(--main-border)',
+                      padding: '0.75rem',
+                      borderRadius: '15px',
+                      marginTop: '0.2rem',
+                      marginBottom: '1rem',
+                      fontSize: '0.75rem',
+                    }}>
+                      <label
+                        style={{
+                          fontWeight: 'bold',
+                          fontStyle: 'italic',
+                          fontFamily: 'var(--main-font)',
+                          fontSize: '0.75rem',
+                          display: 'block',
+                          margintop: '0.2rem',
+                          marginBottom: '0.2rem'
+                        }}
+                      >
+                          Queries <br />
+                        <textarea
+                          style={{
+                            width: '100%',
+                            backgroundColor: 'var(--main-fg)',
+                            borderRadius: '15px',
+                          }}
+                          rows={2*msg.search_query.queries.length + 2}
+                          defaultValue={'👉' + msg.search_query.queries.join('\n👉')}
+                          onChange={(e) => msg.search_query.queries = e.target.value.split('\n').strip('👉')}
+                        />
+                      </label>
+
+                      <label
+                        style={{
+                          fontWeight: 'bold',
+                          fontStyle: 'italic',
+                          fontFamily: 'var(--main-font)',
+                          fontSize: '0.75rem',
+                          display: 'block',
+                          marginBottom: '0.2rem'
+                        }}
+                      >
+                        Authors names<br />
+                        <input
+                          type="text"
+                          style={{
+                            width: '100%',
+                            backgroundColor: 'var(--main-fg)',
+                            border: '1px solid var(--main-border)',
+                            borderRadius: '50px',
+                          }}
+                          defaultValue={msg.search_query.authorName || ''}
+                          placeholder="name1, name2, ..."
+                          onChange={(e) => msg.search_query.authorName = e.target.value}
+                        />
+                      </label>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: '1rem',
+                          marginBottom: '0.5rem',
+                          fontFamily: 'var(--main-font)',
+                        }}
+                      >
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontWeight: 'bold', fontStyle: 'italic', fontSize: '0.75rem' }}>
+                            Start Date<br />
+                            <input
+                              type="text"
+                              style={{
+                                width: '100%',
+                                backgroundColor: 'var(--main-fg)',
+                                border: '1px solid var(--main-border)',
+                                borderRadius: '50px',
+                              }}
+                              defaultValue={msg.search_query.publicationDate_start || ''}
+                              placeholder="yyyy-mm-dd"
+                              onChange={(e) => msg.search_query.publicationDate_start = e.target.value}
+                            />
+                          </label>
+                        </div>
+
+                        <div style={{ flex: 1 }}>
+                          <label style={{ fontWeight: 'bold', fontStyle: 'italic', fontSize: '0.75rem' }}>
+                            End Date<br />
+                            <input
+                              type="text"
+                              style={{
+                                width: '100%',
+                                backgroundColor: 'var(--main-fg)',
+                                border: '1px solid var(--main-border)',
+                                borderRadius: '50px',
+                              }}
+                              defaultValue={msg.search_query.publicationDate_end || ''}
+                              placeholder="yyyy-mm-dd"
+                              onChange={(e) => msg.search_query.publicationDate_end = e.target.value}
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div style={{
+                        width: '100%',
+                        alignSelf: 'center',
+                        textAlign: 'center',
+                        marginTop: '0.5rem',
+                        marginBottom: '0.0rem',
+                        fontSize: '1.2rem',
+                        }}>
+                        <button
+                          title='Save and submit'
+                          style={{
+                            backgroundColor: selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)': 'var(--main-fg)',
+                            width: '10%',
+                            alignSelf: 'center',
+                            border: '1px solid var(--main-border)',
+                            borderRadius: '25px',
+                            padding: '0.5rem 1rem',
+                            cursor: 'pointer',
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSubmit(msg.content, msg.query_id, 'reply', msg.search_query);
+                            setOpenFilterPanels(prev => {
+                              const next = new Set(prev);
+                              next.delete(msg.query_id);
+                              return next;
+                            });
+                          }}
+                        >
+                          🔁
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1261,33 +1500,39 @@ export default function ChatApp() {
           background: 'var(--main-bg)',
           margin: "1%",
           display: "flex",
-          alignItems: "flex-end"
+          // alignItems: "flex-center"
         }}>
           {isStreaming && (
             <div style={{
-              textAlign: 'center',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
               padding: '0.5rem',
-              fontStyle: 'italic',
-              color: '#2563eb',
-              animation: 'pulse 1.5s infinite',
             }}>
-              <span role="img" aria-label="thinking">🤖</span> Generating answer...
+              <div style={{
+                width: '24px',
+                height: '24px',
+                border: '3px solid #c3dafe',
+                borderTop: '3px solid #2563eb',
+                borderRadius: '25px',
+                animation: 'spin 1s linear infinite',
+              }} />
             </div>
           )}
           <textarea
             value={question}
             onChange={e => setQuestion(e.target.value)}
             placeholder="Ask a question..."
-            rows={3}          // 2 or 3
+            rows={2}
             style={{
               background: 'var(--main-bg)',
               flex: 1,
               resize: "vertical",          // allow user to drag if you want
               minHeight: "2.5rem",
               maxHeight: "6rem",
-              padding: "0.75rem",
+              padding: "0.5rem",
               border: "1px solid var(--main-border)",
-              borderRadius: "1%",
+              borderRadius: '25px',
               fontSize: "1rem", 
               lineHeight: 1.3,
               boxSizing: "border-box",
@@ -1300,15 +1545,18 @@ export default function ChatApp() {
           <button
             onClick={() => (!isStreaming ? handleSubmit() : abortSubmit(notebookId))}
             style={{
-              padding: '0.75rem 1.25rem',
+              width:'5%',
+              padding: '0.75rem 0.5rem',
               backgroundColor: '#2563eb',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              fontSize: '1.1rem',
+              fontSize: '0.75rem',
+              justifyContent: 'center',
               height: 'fit-content',
               alignSelf: 'flex-end',
               fontFamily: 'var(--main-font)',
+              margin: '1%'
             }}
           >
             {!isStreaming ? 'Send' : '⏹'}
@@ -1385,7 +1633,7 @@ export default function ChatApp() {
                 background: 'transparent',
                 cursor: 'pointer',
                 padding: 0,
-                margin: 0,
+                margin: '2%',
                 fontSize: '1.5rem',
                 lineHeight: 0, 
                 display: 'inline-flex',
@@ -1404,38 +1652,6 @@ export default function ChatApp() {
                   }}
                 />
             </button>
-            <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
-              <label style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
-                <label
-                  style={{
-                    position: 'relative',
-                    display: 'inline-block',
-                    width: '5%',
-                    height: '2%',
-                  }}
-                >
-                </label>
-              </label>
-            </div>
-            <div style={{ 
-              display: 'flex', 
-              marginRight: '1%', 
-              gap: '0rem',
-              color: 'var(--main-font-color)',
-              fontFamily: 'var(--main-font)',
-              }}>
-              <label htmlFor="topK">TopK:</label>
-              <input
-                type="range"
-                id="topK"
-                min="5"
-                max="15"
-                step="5"
-                value={topK}
-                onChange={(e) => setTopK(parseInt(e.target.value))}
-              />
-              <span>{topK}</span>
-            </div>
           </div>
         )}
 
@@ -1450,8 +1666,9 @@ export default function ChatApp() {
               }}
             >
             </div>
-            {displayedPapers.map((p, i) => {
-              const isExpanded = expandedIndexes.has(i);
+            {displayedPapers.map((p) => {
+              const isExcerptExpanded = expandExcerptIndexes.has(p.paperId);
+              const isAbstractExpanded = expandAbstractIndexes.has(p.paperId);
               return (
                 <div
                   key={p.paperId}
@@ -1476,13 +1693,13 @@ export default function ChatApp() {
                   style={{
                     marginBottom: '1rem',
                     padding: '1rem',
-                    border: '1px solid var(--main-border)',
+                    border: paperMatchingQuery.has(p.paperId) ? '4px solid var(--main-fg-sel)' : 'var(--main-fg)',
                     borderRadius: '6px',
                     cursor: 'pointer',
-                    backgroundColor: highlightedPaperIds.has(p.paperId)
+                    backgroundColor: (highlightedPaperIds.has(p.paperId) && !checkingTrash)
                       ? 'var(--main-fg-sel)'
-                      : isExpanded
-                      ? 'var(--main-fg)'
+                      : checkingTrash
+                      ? 'rgb(240, 208, 223)'
                       : 'var(--main-fg)',
                     transition: 'all 0.3s ease',
                   }}
@@ -1498,9 +1715,55 @@ export default function ChatApp() {
                     </a>
                   </div>
                   <div style={{ fontSize: '0.75rem'}}>{p.authorName}</div>
-                  <div style={{ fontSize: '0.75rem'}}>{p.publicationDate}</div>
+                  <div style={{ fontSize: '0.75rem'}}>{p.venue +' (' + p.publicationDate + ')'}</div>
                   <div style={{ fontSize: '0.75rem'}}>{p.paperId} / score {p.score?.toFixed(2)}</div>
-                  {isExpanded && (
+                  <div
+                    style={{
+                      marginTop: '0.5rem',
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flex: 1,
+                      gap: '0.25rem',
+                    }}
+                  >
+                    <span
+                      onClick={(e) => {
+                      e.stopPropagation();
+                      toggleAbstractExpand(p.paperId);
+                    }}
+                    >
+                      {isAbstractExpanded ? '▲ Abstract' : '▼ Abstract'}
+                    </span>
+                    <span
+                      onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExcerptExpand(p.paperId);
+                    }}
+                    >
+                      {isExcerptExpanded ? '▲ Excerpt' : '▼ Excerpt'}
+                    </span>
+                    <span
+                      title = {!checkingTrash ? 'delete' : 'restore'}
+                      onClick={(e) => {
+                      e.stopPropagation();
+                      const score = !checkingTrash ? -1 : 0;
+                      ScorePaper(p.paperId, score);
+                    }}
+                    >
+                       {!checkingTrash ? '🗑️' : '↩'}
+                    </span>
+                  </div>
+
+                  {isAbstractExpanded && (
+                    <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', fontStyle: 'normal' }}>
+                      {p.abstract}
+                    </div>
+                  )}
+                  {isExcerptExpanded && (
                     <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', fontStyle: 'italic' }}>
                       {p.best_chunks?.map((chunk, idx) => (
                         <div key={idx} style={{ marginBottom: '0.25rem' }}>
@@ -1509,26 +1772,69 @@ export default function ChatApp() {
                       ))}
                     </div>
                   )}
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleExpand(i);
-                    }}
-                    style={{
-                      marginTop: '0.5rem',
-                      fontSize: '0.75rem',
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.25rem',
-                    }}
-                  >
-                    {isExpanded ? '▲ Show less' : '▼ Show more'}
-                  </div>
                 </div>
               );
             })}
+          </div>
+        )}
+        {!rightCollapsed && (
+          <div 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'right', 
+              justifyContent: 'space-between',}}>
+            <button
+              onClick={() => setCheckingTrash(l => !l)}
+              title={checkingTrash ? "Back to Articles" : "Trashed Articles"}
+              style={{
+                border: checkingTrash ? '1px solid rgb(236, 64, 150)' : 'none',
+                background: checkingTrash ? 'rgb(240, 208, 223)' : 'transparent',
+                cursor: 'pointer',
+                padding: 0,
+                margin: '2%',
+                fontSize: '1.5rem',
+                lineHeight: 0, 
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '2em', // or adjust as needed for your top bar
+                width: '2em',
+                display: 'block',
+              }}
+            >
+              ♻️
+            </button>
+            <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
+                <label
+                  style={{
+                    position: 'relative',
+                    display: 'inline-block',
+                    width: '5%',
+                    height: '2%',
+                  }}
+                >
+                </label>
+              </label>
+            </div>
+            <div style={{ 
+              display: 'flex', 
+              marginRight: '2%', 
+              gap: '0rem',
+              color: 'var(--main-font-color)',
+              fontFamily: 'var(--main-font)',
+              }}>
+              <label htmlFor="topK">TopK:</label>
+              <input
+                type="range"
+                id="topK"
+                min="5"
+                max="15"
+                step="5"
+                value={topK}
+                onChange={(e) => setTopK(parseInt(e.target.value))}
+              />
+              <span>{topK}</span>
+            </div>
           </div>
         )}
       </div>

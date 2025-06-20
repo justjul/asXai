@@ -112,6 +112,53 @@ class NotebookManager:
 
         return len(history) - len(new_history)
 
+    async def set_paper_score(self, task_id, paperIds, scores: dict):
+        # updating scores in chat
+        chat_path = self.get_chat_path(task_id)
+        print(scores)
+        scores = {k: val for k, val in scores.items() if 'score' in k}
+        print(scores)
+        if not paperIds:
+            return []
+
+        if not isinstance(paperIds, list):
+            paperIds = [paperIds]
+
+        if os.path.isfile(chat_path):
+            with open(chat_path, "r") as f:
+                chat_history = json.load(f)
+
+            for msg in chat_history:
+                updated_papers = []
+                original_papers = msg.get("papers", [])
+                for paper in original_papers or []:
+                    if paper.get('paperId', '') in paperIds:
+                        paper = {**paper, **scores}
+                        print("paper found in chat")
+                    updated_papers.append(paper)
+
+                if updated_papers:
+                    msg['papers'] = updated_papers
+
+            with open(chat_path, "w") as f:
+                json.dump(chat_history, f, indent=2)
+
+        # updating scores in search results
+        search_path = self.get_search_path(task_id)
+        if os.path.isfile(search_path):
+            with open(search_path, "r") as f:
+                search_history = json.load(f)
+
+            for paper in search_history:
+                if paper.get('paperId', '') in paperIds:
+                    paper = {**paper, **scores}
+                    print("paper found in search")
+
+            with open(search_path, "w") as f:
+                json.dump(search_history, f, indent=2)
+
+        return paperIds
+
     async def delete_queries_from(self, task_id, query_id, keepUserMsg: bool = False):
         chat_path = self.get_chat_path(task_id)
         if not os.path.isfile(chat_path):
@@ -160,8 +207,11 @@ class NotebookManager:
         if os.path.isdir(searchQ_path):
             fname_list = os.listdir(searchQ_path)
             for fname in fname_list:
-                with open(os.path.join(searchQ_path, fname), "r") as f:
+                fpath = os.path.join(searchQ_path, fname)
+                with open(fpath, "r") as f:
                     query_results.extend(json.load(f))
+                os.remove(fpath)
+            os.rmdir(searchQ_path)
         return query_results
 
     async def search_cleanup(self, task_id):

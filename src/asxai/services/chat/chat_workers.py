@@ -189,7 +189,7 @@ class ChatManager:
             self, role, content,
             model, papers, access,
             notebook_title=None,
-            expanded_query=None,
+            search_query=None,
             append=True
     ):
         base_msg = {
@@ -205,7 +205,7 @@ class ChatManager:
                    "model": model,
                    "papers": papers,
                    "access":  access,
-                   "expanded_query": expanded_query,
+                   "search_query": search_query,
                    "notebook_title": notebook_title
                    }
 
@@ -347,7 +347,7 @@ class ChatManager:
 
             papers = []
             match_generator = (
-                pl for pl in res if pl['query_id'] == search_query_id)
+                pl for pl in res if pl['query_id'] == search_query_id and pl.get('paperId'))
             while True:
                 try:
                     papers.append(next(match_generator))
@@ -370,6 +370,7 @@ class ChatManager:
 async def ollama_chat(payload, ollama_manager):
     try:
         task_id = payload["task_id"]
+        search_query = payload["search_query"]
         model_name = payload.get("model", ollama_manager.model_name)
         topK = payload["topK"]
         paperLock = payload["paperLock"]
@@ -400,31 +401,32 @@ async def ollama_chat(payload, ollama_manager):
             notebook_title = context[-1].get('notebook_title',
                                              chat_manager.user_message)
 
-        if chat_manager.mode in ["reply", "regenerate"]:
-            startime = time.time()
-            chat_manager.stream(" *Processing query* ")
-            expanded_query = await ollama_manager.processQuery(query=chat_manager.user_message,
-                                                               chat_history=context)
-            chat_manager.stream(f"*{round(time.time() - startime)}s*")
-
-            if expanded_query:
+        if chat_manager.mode in ["reply"]:
+            if not search_query:
                 startime = time.time()
-                chat_manager.stream(" *Searching* ")
-                chat_manager.submit_search(
-                    prefix_id=0,
-                    query=expanded_query,
-                    topK=topK, paperLock=paperLock
-                )
-
-                papers = []
-                papers = chat_manager.load_search_result(
-                    prefix_id=0)
-                expanded_query['paperIds'] = [p['paperId'] for p in papers]
-
+                chat_manager.stream(" *Processing query* ")
+                search_query = await ollama_manager.processQuery(query=chat_manager.user_message,
+                                                                 chat_history=context)
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
+        elif chat_manager.mode in ["regenerate", "expand"]:
+            user_msg = chat_manager.previous_user_msg(history)
+            search_query = user_msg['search_query']
 
-            else:
-                papers = []
+        if search_query and chat_manager.mode in ["reply", "regenerate"]:
+            startime = time.time()
+            chat_manager.stream(" *Searching* ")
+            chat_manager.submit_search(
+                prefix_id=0,
+                query=search_query,
+                topK=topK, paperLock=paperLock
+            )
+
+            papers = []
+            papers = chat_manager.load_search_result(
+                prefix_id=0)
+            search_query['paperIds'] = [p['paperId'] for p in papers]
+
+            chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
             for paper in papers:
                 chat_manager.save_chat_msg(
@@ -437,18 +439,19 @@ async def ollama_chat(payload, ollama_manager):
                 role="user", content=chat_manager.user_message,
                 model=model_name, papers=papers,
                 access="all", notebook_title=notebook_title,
-                expanded_query=expanded_query,
+                search_query=search_query,
             )
+
         else:
             user_msg = chat_manager.previous_user_msg(history)
             papers = user_msg['papers']
-            expanded_query = user_msg['expanded_query']
+            search_query = user_msg['search_query']
 
         ollama_streamers = []
 
         if chat_manager.mode in ["reply", "regenerate"]:
-            if expanded_query:
-                full_query = ' \n'.join(expanded_query['queries'])
+            if search_query:
+                full_query = ' \n'.join(search_query['queries'])
             else:
                 full_query = chat_manager.user_message
 
@@ -458,11 +461,11 @@ async def ollama_chat(payload, ollama_manager):
             )
             sections = [{"title": '', }]
             abstract = []
-        elif chat_manager.mode in ["expand"] and expanded_query:
+        elif chat_manager.mode in ["expand"] and search_query:
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
-            if expanded_query:
-                full_query = ' \n'.join(expanded_query['queries'])
+            if search_query:
+                full_query = ' \n'.join(search_query['queries'])
             else:
                 full_query = chat_manager.user_message
             generationPlan = await ollama_manager.generatePlan(query=full_query,
@@ -622,7 +625,7 @@ def serialize_documents(documents: List[dict]):
             formatted_ref += f"--- Document ---\n"
             formatted_ref += f"Article ID: [{paper['paperId']}]\n"
             formatted_ref += f"Title: {paper['title']}\n"
-            formatted_ref += f"Authors: {paper['authorName']}\n"
+            formatted_ref += f"Authors: {paper['authorName'].split(',', 1)[0]} et al.\n"
             formatted_ref += f"Date: {paper['publicationDate']}\n"
             # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
             formatted_ref += f"Excerpt:\n"

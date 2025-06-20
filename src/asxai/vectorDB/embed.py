@@ -68,7 +68,7 @@ def chunk_text(
         chunks_token_ids.append(current_chunk)
         chunks_len.append(current_len)
 
-    overlapping_token_chunks = []
+    overlapping_token_chunks, core_token_chunks = [], []
     window_masks = []
 
     for i in range(len(chunks_token_ids)):
@@ -87,13 +87,13 @@ def chunk_text(
 
         # Choose context window
         if i > 0 and i < len(chunks_token_ids)-1:
-            concat = prev_chunk + curr_chunk + next_chunk
+            concat_chunks = prev_chunk + curr_chunk + next_chunk
             start_idx = len(prev_chunk) + prefix_len
         elif i == 0:
-            concat = curr_chunk + next_chunk + next_next_chunk
+            concat_chunks = curr_chunk + next_chunk + next_next_chunk
             start_idx = prefix_len
         else:  # i is last index or second last
-            concat = prev_prev_chunk + prev_chunk + curr_chunk
+            concat_chunks = prev_prev_chunk + prev_chunk + curr_chunk
             start_idx = len(prev_prev_chunk) + len(prev_chunk) + prefix_len
 
         end_idx = start_idx + len(curr_chunk)
@@ -105,13 +105,17 @@ def chunk_text(
             print("Empty mask!", i, start_idx, end_idx)
             raise Exception("Empty mask!")
 
-        overlapping_token_chunks.append(concat)
+        overlapping_token_chunks.append(concat_chunks)
         window_masks.append(mask.unsqueeze(0))
+        core_token_chunks.append(curr_chunk)
 
     overlapping_chunks = tokenizer.batch_decode(overlapping_token_chunks,
                                                 skip_special_tokens=True)
+    core_chunks = tokenizer.batch_decode(overlapping_token_chunks,
+                                         skip_special_tokens=True)
 
     return {"chunks": overlapping_chunks,
+            "core_chunks": core_chunks,
             "masks": window_masks}
 
 
@@ -124,14 +128,15 @@ def load_and_chunk(paperData: dict,
                                chunk_size=chunk_size,
                                max_chunks=max_chunks,
                                prefix_len=prefix_len)
-    texts = masked_chunks["chunks"]
+    text_to_embed = masked_chunks["chunks"]
     masks = masked_chunks["masks"]
     paper_id = paperData["paperId"]
     paperInfo = paperData.copy()
     payloads = [{**paperInfo, "text": chunk, "is_ref": False}
-                for chunk in masked_chunks["chunks"]]
+                # masked_chunks["chunks"]]
+                for chunk in masked_chunks["core_chunks"]]
 
-    return paper_id, texts, masks, payloads
+    return paper_id, text_to_embed, masks, payloads
 
 
 def get_normalized_textdata(textdata):

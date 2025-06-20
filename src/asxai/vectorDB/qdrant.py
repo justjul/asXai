@@ -204,9 +204,14 @@ class QdrantManager:
                                                field_schema="keyword")
 
         if not await self.client.collection_exists(self.collection_name_chunks):
+            # vec_config = VectorParams(size=self.vector_size,
+            #                           distance=Distance.COSINE,
+            #                           datatype=Datatype.FLOAT16)
             vec_config = VectorParams(size=self.vector_size,
                                       distance=Distance.COSINE,
-                                      datatype=Datatype.FLOAT16)
+                                      datatype=Datatype.FLOAT16,
+                                      multivector_config=models.MultiVectorConfig(
+                                          comparator=models.MultiVectorComparator.MAX_SIM))
             await self.client.create_collection(
                 collection_name=self.collection_name_chunks,
                 vectors_config=vec_config,
@@ -318,6 +323,7 @@ class QdrantManager:
 
         if topK_per_paper > 0:
             paperIds = [pt.payload['paperId'] for pt in results.points]
+            logger.info(f"putative Qdrant matches: {paperIds}")
             chunk_condition = FieldCondition(
                 key='paperId', match=models.MatchAny(any=paperIds))
             query_filter = Filter(must=chunk_condition)

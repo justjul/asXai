@@ -137,7 +137,7 @@ class QueryParseMCP(BaseModel):
 class ExpandQueryMCP(BaseModel):
     queries: List[str] = Field(
         description="A list of 1-3 specific questions that collectively cover the user's query, returned as a list of strings."
-        + "Each should be clear, concise, and suitable for retrieving relevant scientific documents.\n")
+        + "Each should be a clear, concise, and full sentence, suitable for retrieving relevant scientific documents.\n")
     search_needed: bool = Field(
         description="True or False; whether a literature search is needed to answer the user's question, based on scope, expertise coverage, and ethical alignment.")
 

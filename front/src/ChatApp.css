@@ -29,6 +29,10 @@
   }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 #root {
   --main-bg: #ffffff;
   --main-fg: #f7f7f7;
