@@ -451,7 +451,8 @@ async def ollama_chat(payload, ollama_manager):
 
         if chat_manager.mode in ["reply", "regenerate"]:
             if search_query:
-                full_query = ' \n'.join(search_query['queries'])
+                full_query = ' \n'.join(search_query.get(
+                    'queries', chat_manager.user_message))
             else:
                 full_query = chat_manager.user_message
 
@@ -465,7 +466,8 @@ async def ollama_chat(payload, ollama_manager):
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
             if search_query:
-                full_query = ' \n'.join(search_query['queries'])
+                full_query = ' \n'.join(search_query.get(
+                    'queries', chat_manager.user_message))
             else:
                 full_query = chat_manager.user_message
             generationPlan = await ollama_manager.generatePlan(query=full_query,
@@ -488,7 +490,7 @@ async def ollama_chat(payload, ollama_manager):
                     content=section.get('scope', ''),
                     documents=section['documents'],
                     stream=True,
-                    options={'temperature': 0.5}
+                    temperature=0.5,
                 ))
 
         # queues = [asyncio.Queue() for _ in sections]
@@ -508,22 +510,24 @@ async def ollama_chat(payload, ollama_manager):
             full_response += f"\n\n## {section['title']}\n\n"
             chat_manager.stream(f"\n\n## {section['title']}\n\n")
 
-            async for chunk in streamer:
-                # while True:
-                #     chunk = await queue.get()
-                # if chunk is None:  # Stream finished
-                #     break
-                token = chunk["message"]["content"]
-                buffer += token
+            full_response += await ollama_manager.stream(streamer, chat_manager.stream_path)
 
-                if len(buffer) > 100:
-                    chat_manager.stream(buffer)
-                    buffer = ""
-                full_response += token
+            # async for chunk in streamer:
+            #     # while True:
+            #     #     chunk = await queue.get()
+            #     # if chunk is None:  # Stream finished
+            #     #     break
+            #     token = chunk["message"]["content"]
+            #     buffer += token
 
-            # Write any remaining buffer
-            if len(buffer) > 0:
-                chat_manager.stream(buffer)
+            #     if len(buffer) > 100:
+            #         chat_manager.stream(buffer)
+            #         buffer = ""
+            #     full_response += token
+
+            # # Write any remaining buffer
+            # if len(buffer) > 0:
+            #     chat_manager.stream(buffer)
 
         # Final end signal
         chat_manager.stream("\n<END_OF_MESSAGE>\n")

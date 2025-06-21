@@ -68,6 +68,7 @@ chat:
 
   min_history_length: 1000
   summary_length: 100
+  inference_service: groq
 
   instruct_chatSummary: >
             You are a scientific assistant summarizing conversations.\n
@@ -92,7 +93,7 @@ chat:
             Specifically, identify and separate:\n
             <FIELDS>\n\n
             If you can't find answers for a field just fill it with 'null'.\n
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
   instruct_expand: >
@@ -106,7 +107,7 @@ chat:
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
 
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
   instruct_keyword: >
@@ -120,7 +121,7 @@ chat:
             Output a JSON object with the following fields:
             <FIELDS>
 
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
 
@@ -151,7 +152,7 @@ chat:
             <FIELDS>\n\n
 
             Limit to 4-8 sections. All sections must include at least one relevant paperId.\n
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here below is the user's query:\n
             <QUERY>
   instruct_gensection: >

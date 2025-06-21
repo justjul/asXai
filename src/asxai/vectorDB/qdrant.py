@@ -51,11 +51,11 @@ class QdrantManager:
         self.collection_name_ids = self.collection_name + '_ids'
         self.chunk_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
                              'citationCount', 'influentialCitationCount',
-                             'publicationDate', 'publicationYear', 'text'}
+                             'publicationDate', 'publicationYear', 'text', 'doi'}
         self.id_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
                           'citationCount', 'influentialCitationCount',
                           'publicationDate', 'publicationYear', 'openAccessPdf',
-                          'title', 'abstract', 'main_text'}
+                          'title', 'abstract', 'main_text', 'doi'}
 
         hidden_size = AutoConfig.from_pretrained(self.model_name).hidden_size
         self.vector_size = hidden_size

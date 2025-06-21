@@ -1237,6 +1237,7 @@ export default function ChatApp() {
                           href="#"
                           onClick={(e) => {
                             e.preventDefault();
+                            setRightCollapsed(false)
                             const paperId = href?.replace('#', '');
                             setHighlightedPaperIds((prev) => {
                               const next = new Set(prev);

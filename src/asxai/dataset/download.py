@@ -77,6 +77,9 @@ def get_s2_articles_batch(
                 df_temp['openAccessPdf'] = df_temp['openAccessPdf'].apply(
                     lambda x: x['url'] if isinstance(x, dict) else x)
 
+                df_temp['doi'] = df_temp['externalIds'].apply(
+                    lambda x: x.get('DOI', '') if isinstance(x, dict) else x)
+
                 df_temp['referenceIds'] = df_temp['references'].apply(
                     lambda x: ';'.join([ref['paperId'] for ref in (x or []) if ref.get('paperId')]))
 
@@ -195,7 +198,7 @@ def update(
         'title', 'citationCount', 'abstract', 'venue', 'authors', 'publicationDate', 'fieldsOfStudy'}))
 
     specs_str = ','.join(s2_validate_fields(fields_to_return, {
-        "influentialCitationCount", "openAccessPdf", "references", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
+        "influentialCitationCount", "openAccessPdf", "references", "externalIds", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
 
     logger.info(f"will now load papers for {years} \n"
                 f"fields of study: {fields_of_study_str}\n"
@@ -232,7 +235,7 @@ def update(
 
         metadata = articles.drop(columns=['title', 'abstract', 'pdf_status'])
         text = articles[['paperId', 'title', 'abstract',
-                         'referenceTitles', 'openAccessPdf', 'pdf_status']]
+                         'referenceTitles', 'openAccessPdf', 'pdf_status', 'doi']]
         text0 = text.copy()
 
         if os.path.isfile(metadata_fp):
@@ -528,12 +531,12 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year):
         arX_data_new = arX_data_new.drop_duplicates(subset='title')
 
         arX_metadata = arX_data_new.drop(columns=['title', 'abstract', 'submitter',
-                                                  'comments', 'journal-ref', 'doi',
+                                                  'comments', 'journal-ref',
                                                   'report-no', 'license', 'versions',
                                                   'authors_parsed', 'pdf_status'])
         arX_text = arX_data_new[['paperId',
                                  'title', 'abstract',
-                                 'openAccessPdf', 'pdf_status']]
+                                 'openAccessPdf', 'pdf_status', 'doi']]
 
         metadata = arX_metadata.set_index("paperId").combine_first(
             old_metadata.set_index("paperId")).reset_index()

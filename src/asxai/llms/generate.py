@@ -3,6 +3,8 @@ import config
 import asyncio
 
 from ollama import AsyncClient
+from groq import AsyncGroq
+
 import requests
 
 from typing import List, Tuple, Union, TypedDict, AsyncGenerator
@@ -53,8 +55,12 @@ class OllamaManager:
         self.max_threads = max_threads
 
         self.is_ollama_running()
-        self.client = AsyncClient(host=f"http://{self.host}:{self.port}",
-                                  timeout=120.0)
+        self.client_ollama = AsyncClient(
+            host=f"http://{self.host}:{self.port}", timeout=120.0
+        )
+        self.client_groq = AsyncGroq(
+            api_key=os.getenv("GROQ_API_KEY"), timeout=120.0, max_retries=5
+        )
         self.semaphore = asyncio.Semaphore(self.max_threads)
 
     def is_ollama_running(self):
@@ -83,13 +89,13 @@ class OllamaManager:
 
     async def is_model_pulled(self):
         try:
-            model_list = await self.client.list()
+            model_list = await self.client_ollama.list()
             models = model_list.models
             available_models = [model.model for model in models]
 
             if self.model_name not in available_models:
                 logger.info(f"Pulling model '{self.model_name}'...")
-                await self.client.pull(self.model_name)
+                await self.client_ollama.pull(self.model_name)
                 logger.info(f"Model '{self.model_name}' pulled successfully.")
             else:
                 logger.debug(f"Model '{self.model_name}' already available.")
@@ -101,19 +107,62 @@ class OllamaManager:
     def resolve_model(self, override):
         return self.model_name if override == "default" else override
 
-    async def generate(self, messages, **kwargs):
+    async def stream(self, streamer, stream_path, provider=chat_config['inference_service']):
+        full_response = ""
+        buffer = ""
+        async for chunk in streamer:
+            if provider.lower() == "ollama":
+                token = chunk["message"]["content"]
+            elif provider.lower() == "groq":
+                token = chunk.choices[0].delta.content or ""
+            buffer += token
+
+            if len(buffer) > 100:
+                with open(stream_path, "a") as stream_file:
+                    stream_file.write(buffer)
+                    stream_file.flush()
+                buffer = ""
+            full_response += token
+
+        # Write any remaining buffer
+        if len(buffer) > 0:
+            with open(stream_path, "a") as stream_file:
+                stream_file.write(buffer)
+                stream_file.flush()
+
+        return full_response
+
+    async def generate(self, messages, provider=chat_config['inference_service'], **kwargs):
         model_name = self.resolve_model(kwargs.pop("model", "default"))
         stream = kwargs.pop("stream", False)
-        async with self.semaphore:
-            # client = AsyncClient(
-            #     host=f"http://{self.host}:{self.port}", timeout=120.0)
-
-            if stream:
-                generator = await self.client.chat(model=model_name, messages=messages, stream=True, **kwargs)
-                return generator
-            else:
-                response = await self.client.chat(model=model_name, messages=messages, stream=False, **kwargs)
-                return response['message']['content']
+        if provider.lower() == "ollama":
+            options = kwargs
+            async with self.semaphore:
+                if stream:
+                    streamer = await self.client_ollama.chat(model=model_name, messages=messages, stream=True, options=options)
+                    return streamer
+                else:
+                    response = await self.client_ollama.chat(model=model_name, messages=messages, stream=False, options=options)
+                    return response['message']['content']
+        elif provider.lower() == "groq":
+            async with self.semaphore:
+                if stream:
+                    streamer = await self.client_groq.chat.completions.create(
+                        # "meta-llama/llama-4-scout-17b-16e-instruct",  # "llama3-8b-8192",#model_name
+                        model="llama3-70b-8192",
+                        messages=messages,
+                        stream=True,
+                        **kwargs
+                    )
+                    return streamer
+                else:
+                    response = await self.client_groq.chat.completions.create(
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",  # "llama3-8b-8192",#model_name
+                        messages=messages,
+                        stream=False,
+                        **kwargs
+                    )
+                    return response.choices[0].message.content
 
     async def generateQuickReply(self, query: str,
                                  documents: str,
@@ -209,7 +258,7 @@ class OllamaManager:
 
         messages = [{'role': 'user', 'content': prompt}]
 
-        response = await self.generate(messages=messages, options={'temperature': 0.0})
+        response = await self.generate(messages=messages, temperature=0.0)
         # result = parse_mcp_response(response)
 
         return response
@@ -240,6 +289,8 @@ class OllamaManager:
         if search_needed:
             payload = await self.keywords(query=query_to_parse, **kwargs)
             parsed = await self.parse(query_to_parse, **kwargs)
+        else:
+            payload, parsed = {}, {}
 
         results = {"queries": queries, **payload, **parsed}
 
@@ -284,7 +335,7 @@ class OllamaManager:
 
         messages = [{'role': 'user', 'content': prompt}]
 
-        response = await self.generate(messages=messages, options={'temperature': 0.0}, **kwargs)
+        response = await self.generate(messages=messages, temperature=0.0, **kwargs)
         result = QueryParseMCP.parse(response)
 
         return result

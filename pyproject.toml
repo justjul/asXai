@@ -12,6 +12,7 @@ dependencies = [
     "qdrant-client",
     "confluent-kafka",
     "ollama",
+    "groq",
 
     "pyarrow",
     "python-dotenv",
