@@ -29,12 +29,16 @@ export default function ChatApp() {
   const [topK, setTopK] = useState(5);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingNotebookIds, setStreamingNotebookIds] = useState(new Set());
+  const streamingNotebookIdRef = useRef();
   const [openFilterPanels, setOpenFilterPanels] = useState(new Set());
   const [papers, setPapers] = useState([]);
   const papersLoadingRef = useRef(false);
   const papersRef = useRef([]);
   const [selectedQueryIds, setSelectedQueryIds] = useState(new Set());
   const [paperMatchingQuery, setPaperMatchingQuery] = useState(new Set());
+  const selPaperRefs = useRef({});
+  const firstPaperRef = useRef(null);
   const [expandExcerptIndexes, setExpandExcerptIndexes] = useState(new Set());
   const [expandAbstractIndexes, setExpandAbstractIndexes] = useState(new Set());
   const [highlightedPaperIds, setHighlightedPaperIds] = useState(new Set());
@@ -50,8 +54,6 @@ export default function ChatApp() {
   const [lockArticleList, setLockArticleList] = useState(false);
   const [editingMsg, setEditingMsg] = useState(null);
   const [editContent, setEditContent] = useState("");
-  const [rephrasingMsg, setRephrasingMsg] = useState(null);
-  const [rephrasingContent, setRephrasingContent] = useState("");
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -166,6 +168,18 @@ export default function ChatApp() {
     return () => container.removeEventListener('scroll', handleScroll);
   }, []);
 
+  useEffect(() => {
+    const selPaperIds = [...highlightedPaperIds];
+    if (selPaperIds.length > 0) {
+      const firstMatchEl = selPaperRefs.current[selPaperIds[0]];
+      if (firstMatchEl) {
+        firstMatchEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    } else if (firstPaperRef.current) {
+      firstPaperRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [highlightedPaperIds]);
+
 
   const refreshMessages = async () => {
     if (!notebookId) return;
@@ -224,6 +238,20 @@ export default function ChatApp() {
       setMessages([])
     } catch (err) {
       console.error("Failed to create new notebook:", err);
+    }
+  };
+
+
+  const updateAllNotebook = async () => {
+    try {
+      const res = await authFetch(
+        user,
+        `${API_URL}/notebook/update`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+      );
+      if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+    } catch (err) {
+      console.error("Failed to update notebooks:", err);
     }
   };
 
@@ -293,23 +321,6 @@ export default function ChatApp() {
     }
   };
 
-
-  const handleRephrase = (msg) => {
-    setRephrasingMsg(msg.query_id);
-    setRephrasingContent(msg.content);
-  };
-
-  const cancelRephrase = () => {
-    setRephrasingMsg(null);
-    setRephrasingContent("");
-  };
-
-  const sendRephrase = async () => {
-    handleSubmit(rephrasingContent, true);
-    cancelRephrase();
-    // 🔧 Optional: persist edit to backend here
-  };
-
   const handleEdit = (msg) => {
     setEditingMsg(msg.query_id);
     setEditContent(msg.content);
@@ -321,7 +332,7 @@ export default function ChatApp() {
   };
 
   const sendEdit = async (id) => {
-    handleSubmit(editContent, id);
+    handleSubmit({editedQuestion: editContent, query_id: id});
     cancelEdit();
     // 🔧 Optional: persist edit to backend here
   };
@@ -344,14 +355,22 @@ export default function ChatApp() {
     }
   };
 
-  const handleSubmit = async (editedQuestion = null, query_id = null, mode = 'reply', search_query = null) => {
+  const handleSubmit = async ({
+    editedQuestion = null, 
+    query_id = null, 
+    mode = 'reply', 
+    search_query = null, 
+    nbId = null
+  }) => {
     const finalQuestion = editedQuestion ?? question;
+    const notebookChatId = nbId ?? notebookId
+
     if (!finalQuestion.trim() && !query_id) return;
     console.log(query_id)
     let queryId;
     console.log(query_id)
     try {
-      const res = await authFetch(user, `${API_URL}/notebook/${notebookId}/chat`, {
+      const res = await authFetch(user, `${API_URL}/notebook/${notebookChatId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -370,26 +389,28 @@ export default function ChatApp() {
       return;
     }
 
-    if (finalQuestion.trim()) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'user', content: finalQuestion, query_id: queryId },
-      ]);
-      setQuestion('');
+    if (notebookChatId === notebookId) {
+      if (finalQuestion.trim()) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', content: finalQuestion, query_id: queryId },
+        ]);
+        setQuestion('');
+      }
+
+      if (mode !== 'regenerate' && mode !== 'edit') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: '', query_id: queryId },
+        ]);
+        setQuestion('');
+      }
     }
 
-    if (mode !== 'regenerate' && mode !== 'edit') {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: '', query_id: queryId },
-      ]);
-      setQuestion('');
-    }
-
-    streamAnswer(notebookId, queryId);
+    streamAnswer(notebookChatId, queryId);
   };
 
-  const streamAnswer = async (notebookId, query_id) => {
+  const streamAnswer = async (notebookStreamId, query_id) => {
 
     const maxRetries = 3;
     let retryCount = 0;
@@ -399,9 +420,16 @@ export default function ChatApp() {
 
     const startStreaming = async () => {
       setIsStreaming(true);
+      setStreamingNotebookIds(prev => {
+        const next = new Set(prev);
+        next.add(notebookStreamId);
+        return next;
+      });
+      
+      streamingNotebookIdRef.current = notebookStreamId;
 
       try {
-        const url = `${API_URL}/notebook/${notebookId}/chat/stream`;
+        const url = `${API_URL}/notebook/${notebookStreamId}/chat/stream`;
         const res = await authFetch(user, url);
 
         if (!res.ok || !res.body) {
@@ -415,6 +443,7 @@ export default function ChatApp() {
         const decoder = new TextDecoder();
         const parser = createParser({
           onEvent: (event) => {
+            if (streamingNotebookIdRef.current !== notebookId) return;
             
             if (event.data) {
               if (!papersLoadingRef.current && papersRef.current.length === 0 && assistantResponse.length > 100) {
@@ -476,7 +505,14 @@ export default function ChatApp() {
           console.error("Stream failed after maximum retries.");
         }
       } finally {
-        if (retryCount === 0 || success) setIsStreaming(false);
+        if (retryCount === 0 || success) {
+          setIsStreaming(false)
+          setStreamingNotebookIds(prev => {
+            const next = new Set(prev);
+            next.delete(notebookStreamId);
+            return next;
+          });
+        };
       }
     };
 
@@ -791,35 +827,66 @@ export default function ChatApp() {
           {!leftCollapsed && (
             <>
               {/* Notebook list container—make this grow to fill the middle */}
-              <div style={{ padding: '0.5rem', flex: 1, overflowY: 'auto' }}>
-                {/* "+" button at end of list */}
-                <button
-                  onClick={createNewNotebook}
-                  style={{
-                    width: "2.5rem",
-                    height: "2.5rem",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    border: 'none',
-                    borderRadius: "4px",
-                    background: 'var(--main-bg)',
+              <div style={{
+                padding: '0.5rem', 
+                flex: 1, 
+                overflowY: 'auto',
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  width: '100%', // make sure it spans the container
+                  padding: '0.0rem',
+                  marginTop: '0.5rem',
                   }}
-                  title="New notebook"
                 >
-                  <img
-                    src= "/book_add_icon.svg"
-                    alt= "New notebook"
+                  <button
+                    onClick={createNewNotebook}
                     style={{
-                      height: '1.7em', // or adjust as needed for your top bar
-                      width: '1.7em',
-                      display: 'block',
-                      marginRight: '1%',
-                      pointerEvents: 'none', // so clicks reach the button
-                      background: 'transparent',
+                      width: "2.5rem",
+                      height: "2.5rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      border: 'none',
+                      borderRadius: "4px",
+                      background: 'var(--main-bg)',
                     }}
-                  />
-                </button>
+                    title="New notebook"
+                  >
+                    <img
+                      src= "/book_add_icon.svg"
+                      alt= "New notebook"
+                      style={{
+                        height: '1.7em', // or adjust as needed for your top bar
+                        width: '1.7em',
+                        display: 'block',
+                        marginRight: '1%',
+                        pointerEvents: 'none', // so clicks reach the button
+                        background: 'transparent',
+                      }}
+                    />
+                  </button>
+                  <button
+                    onClick={updateAllNotebook}
+                    style={{
+                      width: "2.5rem",
+                      height: "2.5rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: '5%',
+                      border: 'none',
+                      borderRadius: "4px",
+                      background: 'var(--main-bg)',
+                    }}
+                    title="Update all Notebooks"
+                  >
+                    🔔
+                  </button>
+                </div>
                 {notebooks.map((nb) => (
                   <div
                     key={nb.id}
@@ -878,6 +945,15 @@ export default function ChatApp() {
                             padding: '0.2rem',
                           }}
                         >
+                          <div
+                            onClick={() => {
+                              handleSubmit({editedQuestion: "*notebook update*", nbId: nb.id});
+                              setDropdownOpen(null);
+                            }}
+                            style={{ padding: '0.3rem 0.6rem', cursor: 'pointer' }}
+                          >
+                            Update
+                          </div>
                           <div
                             onClick={() => {
                               renameNotebook(nb.id, nb.title);
@@ -1166,22 +1242,46 @@ export default function ChatApp() {
             background: 'var(--main-bg)',
             border: 'none'
             }} ref={chatContainerRef}>
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                // position: 'relative',
-                background: msg.query_id && selectedQueryIds.has(msg.query_id) ? 'var(--main-fg-sel)' : 'var(--main-fg)',
-                padding: '1rem',
-                borderRadius: '1%',
-                cursor: 'default',
-                border: "none",
-                marginLeft: msg.role === 'user' ? '15%' : '5%',
-                marginRight: msg.role === 'user' ? '5%' : '5%',
-                marginBottom: '0%',
-                marginTop: msg.role === 'user' ? '2%' : '1%',
-              }}
-            >
+          {messages.map((msg, idx) => {
+            const isSelected = msg.query_id && selectedQueryIds.has(msg.query_id);
+            const isUpdate = msg?.msg_type === "update";
+
+            const backgroundColor = isSelected
+              ? 'var(--main-fg-sel)'
+              : isUpdate
+              ? 'var(--main-fg-update)'
+              : 'var(--main-fg)';
+
+            const font_size = '1rem'
+
+            const marginLeft = isUpdate
+              ? '15%' 
+              : msg.role === 'user' 
+              ? '15%'
+              : '5%';
+                  
+            const marginRight = isUpdate
+              ? '15%' 
+              : msg.role === 'user' 
+              ? '5%'
+              : '5%';
+
+            return (
+              <div
+                key={idx}
+                style={{
+                  background: backgroundColor,
+                  padding: '1rem',
+                  borderRadius: '1%',
+                  cursor: 'default',
+                  border: "none",
+                  fontSize: font_size,
+                  marginLeft: marginLeft,
+                  marginRight: marginRight,
+                  marginBottom: '0%',
+                  marginTop: msg.role === 'user' ? '2%' : '1%',
+                }}
+              >
               <div 
                 style={{ 
                   // display: 'flex', 
@@ -1213,19 +1313,7 @@ export default function ChatApp() {
                   </div>
                 </div>
               ) : 
-              msg.role === 'assistant' && rephrasingMsg === msg.query_id ? (
-                <div>
-                  <textarea
-                    value={rephrasingContent}
-                    onChange={(e) => setRephrasingContent(e.target.value)}
-                    style={{ width: '100%', minHeight: '5rem' }}
-                  />
-                  <div style={{ marginTop: '0.5rem', textAlign: 'right' }}>
-                    <button onClick={() => sendRephrase()}>Rephrase</button>
-                    <button onClick={() => cancelRephrase()}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
+                (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
@@ -1305,13 +1393,8 @@ export default function ChatApp() {
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (msg.role === 'user') {
-                          cancelRephrase()
-                          handleEdit(msg);
-                        } else if (msg.role === 'assistant') {
-                          cancelEdit()
-                          handleRephrase(msg);
-                        }
+                        cancelEdit()
+                        handleEdit(msg);
                       }}
                       title="Edit message"
                     >
@@ -1340,7 +1423,7 @@ export default function ChatApp() {
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleSubmit("", msg.query_id, 'expand');
+                        handleSubmit({query_id: msg.query_id, mode: 'expand'});
                       }}
                       title="More detail"
                     >
@@ -1478,7 +1561,7 @@ export default function ChatApp() {
                           }}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleSubmit(msg.content, msg.query_id, 'reply', msg.search_query);
+                            handleSubmit({editedQuestion: msg.content, query_id: msg.query_id, mode: 'reply', search_query: msg.search_query});
                             setOpenFilterPanels(prev => {
                               const next = new Set(prev);
                               next.delete(msg.query_id);
@@ -1494,7 +1577,8 @@ export default function ChatApp() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
         <div style={{
@@ -1503,7 +1587,7 @@ export default function ChatApp() {
           display: "flex",
           // alignItems: "flex-center"
         }}>
-          {isStreaming && (
+          {streamingNotebookIds.has(notebookId) && (
             <div style={{
               display: 'flex',
               justifyContent: 'center',
@@ -1544,7 +1628,7 @@ export default function ChatApp() {
             }}
           />
           <button
-            onClick={() => (!isStreaming ? handleSubmit() : abortSubmit(notebookId))}
+            onClick={() => (!streamingNotebookIds.has(notebookId) ? handleSubmit() : abortSubmit(notebookId))}
             style={{
               width:'5%',
               padding: '0.75rem 0.5rem',
@@ -1560,7 +1644,7 @@ export default function ChatApp() {
               margin: '1%'
             }}
           >
-            {!isStreaming ? 'Send' : '⏹'}
+            {!streamingNotebookIds.has(notebookId) ? 'Send' : '⏹'}
           </button>
         </div>
       </div>
@@ -1667,12 +1751,20 @@ export default function ChatApp() {
               }}
             >
             </div>
-            {displayedPapers.map((p) => {
+            {displayedPapers.map((p, idx) => {
               const isExcerptExpanded = expandExcerptIndexes.has(p.paperId);
               const isAbstractExpanded = expandAbstractIndexes.has(p.paperId);
               return (
                 <div
                   key={p.paperId}
+                  ref={(el) => {
+                    if (highlightedPaperIds.has(p.paperId)) {
+                      selPaperRefs.current[p.paperId] = el;
+                    }
+                    if (idx === 0) {
+                      firstPaperRef.current = el;
+                    }
+                  }}
                   onClick={(e) => {
                     setRightCollapsed(false); // Auto‐open on paper click
                     const paperId = p.paperId;

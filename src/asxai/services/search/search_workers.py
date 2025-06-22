@@ -166,6 +166,10 @@ async def batch_and_save(raw_payloads):
             meta_filters[-1].append(['publicationDate', 'lte',
                                     search_queries[qid]['publicationDate_end']])
 
+        if search_queries[qid].get('search_paperIds', None):
+            meta_filters[-1].append(['paperId', '==',
+                                    search_queries[qid]['search_paperIds']])
+
         existing_results = load_existing_result(task_ids[qid])
         if paperLocks[qid]:
             existing_paper_ids = [

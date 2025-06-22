@@ -76,7 +76,7 @@ chat:
             Your task is to extract and summarize the key topics discussed in the recent history in <SUMMARY_LENGTH> words.\n
             Output format:
             <FIELDS>\n\n
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here is the conversation history with previous summaries:\n
             <HISTORY>
   instruct_title: > 
@@ -84,7 +84,7 @@ chat:
             Given a user query, produce a short, clear, high-level title.\n
             Output format:
             <FIELDS>\n\n
-            Output strictly valid JSON.\n
+            Output the result as a strictly valid JSON and nothing else.\n
             Here is the original user's query:\n
             <QUERY>
   instruct_parse: > 
@@ -101,8 +101,9 @@ chat:
 
              Given the full conversation context and the user request, you must extract a search expansion plan:\n
             - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
-            - Indicate whether a scientific article search is needed to address these questions, based on ethical boundaries 
-            or on whether the current context of the conversation is sufficient to answer the user's query accurately.\n
+            - Indicate whether the user's questions is acceptable in terms of ethical boundaries.\n
+            - Indicate whether the user's question is in the scope of your domain of expertise as a scientific assistant.\n
+            - If the user's question is about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
 
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
@@ -173,8 +174,6 @@ chat:
             Here below are the section title and scope:\n
             - Section Title: <TITLE>\n
             - Section Scope: <CONTENT>
-
-            """
   instruct_quickreply: >
             You are a scientific assistant generating a quick factual response to a user question.\n\n
 
@@ -187,8 +186,26 @@ chat:
             - Avoid fabricating article IDs.
             - If you are unsure, state that more research may be needed.
 
+            Answer directly to the user.
             Here is the user's query:\n
-            <QUERY>\n
+            <CONTENT>\n
+  instruct_update: >
+            You are a scientific assistant generating a short summary of new articles related to the past user's query.\n\n
+
+            You are provided the user's queries.\n
+            
+            Given the list of retrieved articles provided in the context, your task is to:\n
+            - Generate a concise summary of each article.
+            - Only use information found in the provided documents or widely accepted scientific knowledge.
+            - Refer to each article using their corresponding hashed article ID provided in the context.\n
+            - Avoid fabricating article IDs.
+            - For each article mention how it could interest the user given its past queries.
+
+            Answer directly to the user.
+            Mention at the end of your response that the article have been automatically added to the user's notebook but can be removed by using the delete button.\n
+            Here are the user's past queries:\n
+            <CONTENT>\n
+
 
   # instruct_parse: > 
   #           You are a helpful assistant that parse queries and only return the requested fields.\n

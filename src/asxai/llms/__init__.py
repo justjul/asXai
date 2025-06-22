@@ -1,5 +1,5 @@
-from .generate import OllamaManager
+from .generate import InferenceManager
 
 __all__ = [
-    "OllamaManager",
+    "InferenceManager",
 ]

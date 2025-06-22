@@ -138,8 +138,12 @@ class ExpandQueryMCP(BaseModel):
     queries: List[str] = Field(
         description="A list of 1-3 specific questions that collectively cover the user's query, returned as a list of strings."
         + "Each should be a clear, concise, and full sentence, suitable for retrieving relevant scientific documents.\n")
-    search_needed: bool = Field(
-        description="True or False; whether a literature search is needed to answer the user's question, based on scope, expertise coverage, and ethical alignment.")
+    ethical: bool = Field(
+        description="True or False; whether the user's question is ethically acceptable.")
+    scientific: bool = Field(
+        description="True or False; whether the user's question is 'scientific', i.e. in the scope of your expertise as a scientific assistant.")
+    search_paperIds: bool = Field(
+        description="Article IDs of the articles the user explicitely refers to, returned as a list of strings if applicable or an empty list otherwise. ")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -154,7 +158,10 @@ class ExpandQueryMCP(BaseModel):
         res = parse_mcp_response(response)
         key_map = {
             'queries': ['sub_queries', 'questions', 'queries'],
-            'search_needed': ['search_needed', 'search', 'needed']
+            'scientific': ['scientific', 'search', 'needed'],
+            'ethical': ['ethical', 'valid', 'acceptable'],
+            'search_paperIds': ['paperIds', 'search', 'paper'],
+
         }
         extractor = RobustKeyExtractor(key_map)
         return extractor.extract(res)
@@ -220,7 +227,7 @@ class GenerationPlannerMCP(BaseModel):
 
         key_map = {
             'title': ['title', 'topic'],
-            'scope': ['description', 'content', 'scope'],
+            'content': ['description', 'content', 'scope'],
             'paperIds': ['paper', 'references', 'papers']
         }
         extractor = RobustKeyExtractor(key_map)

@@ -13,7 +13,7 @@ from fastapi import FastAPI,  Request, HTTPException
 import uvicorn
 import hashlib
 from pydantic import BaseModel
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from confluent_kafka import Producer, Consumer
 
@@ -289,42 +289,13 @@ async def submit_chat(notebook_id: str, req: ChatRequest, decoded_token: dict = 
         "timestamp": time.time(),
         "done": 0
     }
+
     print(req.model)
     producer.produce(CHAT_REQ_TOPIC, key=task_id, value=json.dumps(payload))
     producer.flush()
     return {"status": "submitted",
             "task_id": task_id,
             "query_id": query_id,
-            "user_id": user_id,
-            "notebook_id": notebook_id}
-
-
-@app.post("/notebook/{notebook_id}/expand")
-async def submit_chat(notebook_id: str, req: ExpandRequest, decoded_token: dict = Depends(verify_token)):
-    user_id = safe_user_id(decoded_token["uid"])
-    create_user(user_id)
-    task_id = f"{user_id}/{notebook_id}"
-    payload = {
-        "task_id": task_id,
-        "query_id": req.query_id,
-        "user_id": user_id,
-        "notebook_id": notebook_id,
-        "content": None,
-        "role": "user",
-        "model": req.model,
-        "topK": req.topK,
-        "paperLock": req.paperLock,
-        "rephrase": req.rephrase,
-        "regenerate": req.regenerate,
-        "timestamp": None,
-        "done": 0
-    }
-    print(req.model)
-    producer.produce(CHAT_REQ_TOPIC, key=task_id, value=json.dumps(payload))
-    producer.flush()
-    return {"status": "expansion requested",
-            "task_id": task_id,
-            "query_id": req.query_id,
             "user_id": user_id,
             "notebook_id": notebook_id}
 
@@ -394,8 +365,49 @@ async def abort_generation(notebook_id: str, decoded_token: dict = Depends(verif
     }
     producer.produce(CHAT_CANCEL_TOPIC, key=task_id, value=json.dumps(payload))
     producer.flush()
-    return {"status": "cancelled",
-            "task_id": task_id}
+    return JSONResponse(content={"status": "cancelled", "task_id": task_id})
+
+
+@app.post("/notebook/update")
+async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    create_user(user_id)
+
+    # Get list of notebooks
+    notebook_list = await Notebook_manager.list(user_id)
+    if not notebook_list:
+        raise HTTPException(status_code=404, detail="No notebooks found")
+
+    content = "*notebook update*"
+    # Update each notebook
+    for notebook in notebook_list[0:1]:
+        notebook_id = notebook["id"]
+        print(notebook_id)
+        query_id = hash_id(notebook_id + content + str(time.time()))
+        task_id = f"{user_id}/{notebook_id}"
+
+        payload = {
+            "task_id": task_id,
+            "query_id": query_id,
+            "user_id": user_id,
+            "notebook_id": notebook_id,
+            "content": content,
+            "search_query": None,
+            "role": "user",
+            "model": "default",
+            "topK": None,
+            "paperLock": False,
+            "mode": "reply",
+            "timestamp": time.time(),
+            "done": 0
+        }
+
+        producer.produce(CHAT_REQ_TOPIC, key=task_id,
+                         value=json.dumps(payload))
+
+    producer.flush()
+
+    return JSONResponse(content={"status": "submitted", "notebooks_updated": len(notebook_list)})
 
 
 @app.get("/notebook/{notebook_id}/chat/final")
@@ -440,11 +452,7 @@ async def get_final_chat(notebook_id: str, decoded_token: dict = Depends(verify_
             raise HTTPException(
                 status_code=404, detail="Incomplete conversation.")
 
-        return {
-            "user": user_msg,
-            "assistant": assistant_msg,
-            "papers": papers
-        }
+        return JSONResponse(content={"user": user_msg, "assistant": assistant_msg, "papers": papers})
 
     except Exception as e:
         logger.error(f"Error reading chat history for {task_id}: {e}")
@@ -501,11 +509,7 @@ async def get_chat_msg(notebook_id: str, query_id: str, decoded_token: dict = De
             raise HTTPException(
                 status_code=404, detail="Incomplete conversation.")
 
-        return {
-            "user": user_msg,
-            "assistant": assistant_msg,
-            "papers": papers
-        }
+        return JSONResponse(content={"user": user_msg, "assistant": assistant_msg, "papers": papers})
 
     except Exception as e:
         logger.error(f"Error reading chat history for {task_id}: {e}")
@@ -530,7 +534,7 @@ async def delete_chat_msg(notebook_id: str, query_id: str, decoded_token: dict =
             raise HTTPException(
                 status_code=404, detail="No messages found with given query_id.")
 
-        return {"status": "success", "deleted": diff}
+        return JSONResponse(content={"status": "success", "deleted": diff})
 
     except Exception as e:
         logger.error(f"Error deleting chat message for {task_id}: {e}")
@@ -555,7 +559,7 @@ async def delete_chat_msg_from(notebook_id: str, query_id: str, keepUserMsg: boo
             raise HTTPException(
                 status_code=404, detail="No messages found with given query_id.")
 
-        return {"status": "success", "deleted": diff}
+        return JSONResponse(content={"status": "success", "deleted": diff})
 
     except Exception as e:
         logger.error(f"Error deleting chat messages for {task_id}: {e}")
@@ -597,9 +601,7 @@ async def get_chat_papers(notebook_id: str, query_id: str, decoded_token: dict =
             raise HTTPException(
                 status_code=404, detail="Failed to load papers.")
 
-        return {
-            "papers": papers
-        }
+        return JSONResponse(content={"papers": papers})
 
     except Exception as e:
         logger.error(f"Error loading papers for {task_id}/{query_id}: {e}")
@@ -615,9 +617,7 @@ async def set_paper_scores(notebook_id: str, paperId: str, scores: dict, decoded
     try:
         changedId = await Notebook_manager.set_paper_score(task_id, paperIds=paperId, scores=scores)
 
-        return {
-            "papers": changedId, "scores": scores
-        }
+        return JSONResponse(content={"papers": changedId, "scores": scores})
 
     except Exception as e:
         logger.error(
@@ -646,7 +646,7 @@ async def get_latest_result(notebook_id: str, decoded_token: dict = Depends(veri
     if result is None:
         raise HTTPException(
             status_code=404, detail=f"No result found for {task_id}")
-    return {"task_id": task_id, "notebook": result}
+    return JSONResponse(content={"task_id": task_id, "notebook": result})
 
 
 @app.patch("/notebook/{notebook_id}/rename/{new_title}")
@@ -656,7 +656,7 @@ async def rename_notebook(notebook_id: str, new_title: str, decoded_token: dict 
 
     await Notebook_manager.rename(task_id, new_title)
 
-    return {"task_id": task_id, "notebook_id": notebook_id, "notebook_title": new_title}
+    return JSONResponse(content={"task_id": task_id, "notebook_id": notebook_id, "notebook_title": new_title})
 
 
 @app.delete("/notebook/{notebook_id}/delete")
@@ -666,21 +666,21 @@ async def delete_notebook(notebook_id: str, decoded_token: dict = Depends(verify
 
     await Notebook_manager.delete(task_id)
 
-    return {"task_id": task_id, "notebook_id": notebook_id}
+    return JSONResponse(content={"task_id": task_id, "notebook_id": notebook_id})
 
 
 @app.get("/notebook")
 async def get_user_notebooks(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     notebook_list = await Notebook_manager.list(user_id)
-    return notebook_list
+    return JSONResponse(content=notebook_list)
 
 
 @app.get("/notebook/new_task_id")
 def generate_task_id(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     print(user_id)
-    return create_task_id(user_id)
+    return JSONResponse(content=create_task_id(user_id))
 
 
 @app.get("/admin/delete_ghost_users")
@@ -703,7 +703,7 @@ async def delete_notebook(decoded_token: dict = Depends(verify_token)):
         res = delete_user(uid)
         deleted_users.append(res.get("user_id"))
 
-    return {"deleted_user_ids": deleted_users}
+    return JSONResponse(content={"deleted_user_ids": deleted_users})
 
 
 @app.post("/admin/set_admin_rights")
@@ -713,7 +713,7 @@ def set_admin_rights(payload: dict, decoded_token: dict = Depends(verify_token))
 
     uid = payload.get("uid")
     set_admin_claim([uid])
-    return {"message": f"{uid} has now admin access"}
+    return JSONResponse(content={"message": f"{uid} has now admin access"})
 
 
 @app.post("/admin/revoke_admin_rights")
@@ -727,7 +727,7 @@ def set_admin_rights(payload: dict, decoded_token: dict = Depends(verify_token))
 
     uid = payload.get("uid")
     revoke_admin_claim([uid])
-    return {"message": f"Admin rights have been revoked for {uid}"}
+    return JSONResponse(content={"message": f"Admin rights have been revoked for {uid}"})
 
 
 @app.get("/auth/validate_admin")
@@ -738,7 +738,7 @@ def validate_admin(decoded_token: dict = Depends(verify_token)):
     """
     if not decoded_token.get("admin"):
         raise HTTPException(status_code=403, detail="Admins only")
-    return {"ok": True}
+    return JSONResponse(content={"ok": True})
 
 
 # Prometheus metrics endpoint: keep it at the bottom

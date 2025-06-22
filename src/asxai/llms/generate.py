@@ -32,7 +32,7 @@ ollama_config = params["ollama"]
 chat_config = params["chat"]
 
 
-class OllamaManager:
+class InferenceManager:
     def __init__(self,
                  model_name: str = ollama_config["model_name"],
                  docker_timeout: float = ollama_config["docker_timeout"],
@@ -204,17 +204,34 @@ class OllamaManager:
 
         return result
 
-    async def generateSection(self, title: str, content: str,
-                              documents: str,
-                              gensection_instruct: str = chat_config['instruct_gensection'],
-                              **kwargs):
+    async def writer(self, title: str = '',
+                     content: str = None,
+                     documents: str = '',
+                     context: List[dict] = None,
+                     instruct: str = chat_config['instruct_gensection'],
+                     **kwargs):
+        # if query:
+        #     logger.info("generating quick reply")
+        #     instruct = QuickReplyMCP.generate_prompt(quick_instruct)
+        #     prompt = instruct.replace("<QUERY>", query)
+        # elif content:
+        #     instruct = SectionGenerationMCP.generate_prompt(
+        #         gensection_instruct)
+        #     prompt = instruct.replace("<TITLE>", title)
+        #     prompt = instruct.replace("<CONTENT>", content)
 
-        instruct = SectionGenerationMCP.generate_prompt(gensection_instruct)
         prompt = instruct.replace("<TITLE>", title)
         prompt = instruct.replace("<CONTENT>", content)
 
-        messages = [{'role': 'user', 'content': doc} for doc in documents]
-        messages += [{'role': 'user', 'content': prompt}]
+        messages = []
+        if context:
+            messages.extend(
+                [{'role': msg['role'], 'content': msg['content']}
+                    for msg in context]
+            )
+        messages.extend([{'role': 'user', 'content': doc}
+                        for doc in documents])
+        messages.extend([{'role': 'user', 'content': prompt}])
 
         kwargs.pop("stream", None)
         streamer = await self.generate(messages=messages, stream=True, **kwargs)
@@ -279,20 +296,21 @@ class OllamaManager:
         logger.info(f"Expand results: {result}")
 
         queries = result.get('queries', [])
-        search_needed = result.get('search_needed', [])
+        scientific = result.get('scientific', [])
+        ethical = result.get('ethical', [])
 
         # This is a temporary fix before we adjust search strategy with multiple questions:
         # We concatenate questions to deal with a single search per user's query.
         query_to_parse = ' '.join(queries)
 
         results = []
-        if search_needed:
+        if scientific and ethical:
             payload = await self.keywords(query=query_to_parse, **kwargs)
             parsed = await self.parse(query_to_parse, **kwargs)
         else:
             payload, parsed = {}, {}
 
-        results = {"queries": queries, **payload, **parsed}
+        results = {**result, **payload, **parsed}
 
         logger.info(f"Expand + Keywords + Parsed results: {results}")
 

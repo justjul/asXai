@@ -10,7 +10,7 @@ import hashlib
 import requests
 
 import config
-from asxai.llms import OllamaManager
+from asxai.llms import InferenceManager
 from .notebook_manager import NotebookManager
 import torch
 import numpy as np
@@ -76,17 +76,17 @@ async def stream_to_queue(streamer, queue):
 
 
 class ChatManager:
-    def __init__(self, payload, ollama_manager):
+    def __init__(self, payload, inference_manager):
         self.task_id = payload["task_id"]
         self.user_id = payload['user_id']
         self.query_id = payload['query_id']
         self.notebook_id = payload['notebook_id']
         self.user_message = payload["content"]
-        self.model_name = payload.get("model", ollama_manager.model_name)
+        self.model_name = payload.get("model", inference_manager.model_name)
         self.topK = payload["topK"]
         self.paperLock = payload["paperLock"]
         self.mode = payload["mode"]
-        self.model_name = ollama_manager.resolve_model(self.model_name)
+        self.model_name = inference_manager.resolve_model(self.model_name)
         self.chat_path = os.path.join(
             config.USERS_ROOT, f"{self.task_id}.chat.json")
         self.search_path = os.path.join(
@@ -180,7 +180,7 @@ class ChatManager:
                     f"Failed to load chat context for {self.task_id}: {e}")
         return []
 
-    def previous_user_msg(self, history: List[dict]):
+    def fetch_user_msg(self, history: List[dict]):
         user_msg = next((m for m in reversed(history) if m.get(
             'role') == "user" and m.get('query_id') == self.query_id), [])
         return user_msg
@@ -188,6 +188,7 @@ class ChatManager:
     def save_chat_msg(
             self, role, content,
             model, papers, access,
+            msg_type,
             notebook_title=None,
             search_query=None,
             append=True
@@ -203,6 +204,7 @@ class ChatManager:
                    "role": role,
                    "content": content,
                    "model": model,
+                   "msg_type": msg_type,
                    "papers": papers,
                    "access":  access,
                    "search_query": search_query,
@@ -249,6 +251,7 @@ class ChatManager:
             "notebook_id": self.notebook_id,
             "model": "summarizer",
             "access": "assistant",
+            "msg_type": "summary",
             "query_id": self.query_id,
             "papers": None,
             "notebook_title": self.notebook_title
@@ -294,7 +297,7 @@ class ChatManager:
                 assist_cumsum) if n > chat_config['min_history_length']), None)
             if turn_idx_end is not None:
                 history_to_summarize = recent_history[:-turn_idx_end]
-                summary = await self.ollama_manager.chatSummarize(chat_history=summaries + history_to_summarize)
+                summary = await self.inference_manager.chatSummarize(chat_history=summaries + history_to_summarize)
                 summary_ts = history_to_summarize[-1]["timestamp"]
                 summary_id = history_to_summarize[-1]["query_id"]
                 self.save_chat_summary(
@@ -336,6 +339,7 @@ class ChatManager:
                 try:
                     res = requests.get(
                         f"{SEARCH_API_URL}/search/{self.task_id}/{search_query_id}").json()
+                    print(res)
                     res = res['notebook']
                     if (res and search_query_id in {r['query_id'] for r in res}):
                         break
@@ -367,16 +371,20 @@ class ChatManager:
         return papers
 
 
-async def ollama_chat(payload, ollama_manager):
+async def chat_process(payload, inference_manager):
     try:
         task_id = payload["task_id"]
         search_query = payload["search_query"]
-        model_name = payload.get("model", ollama_manager.model_name)
+        model_name = payload.get("model", inference_manager.model_name)
         topK = payload["topK"]
         paperLock = payload["paperLock"]
-        model_name = ollama_manager.resolve_model(model_name)
+        model_name = inference_manager.resolve_model(model_name)
+        print(payload["content"])
+        if payload["content"].lower() == "*notebook update*":
+            logger.info("UPDATE MODE")
+            payload["mode"] = "update"
 
-        chat_manager = ChatManager(payload, ollama_manager)
+        chat_manager = ChatManager(payload, inference_manager)
 
         # Load existing context from disk (if any).
         history = chat_manager.load_chat_history()
@@ -395,109 +403,134 @@ async def ollama_chat(payload, ollama_manager):
         async_runner.submit(chat_manager.update_summaries(history, summaries))
 
         if not context:
-            title_response = await ollama_manager.generateTitle(query=chat_manager.user_message)
+            title_response = await inference_manager.generateTitle(query=chat_manager.user_message)
             notebook_title = title_response['title']
         else:
             notebook_title = context[-1].get('notebook_title',
                                              chat_manager.user_message)
 
+        full_query = chat_manager.user_message + ' \n'
+
         if chat_manager.mode in ["reply"]:
             if not search_query:
                 startime = time.time()
                 chat_manager.stream(" *Processing query* ")
-                search_query = await ollama_manager.processQuery(query=chat_manager.user_message,
-                                                                 chat_history=context)
+                search_query = await inference_manager.processQuery(query=chat_manager.user_message,
+                                                                    chat_history=context)
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
+            search_query['paperIds'] = []
+            search_query['topK'] = topK
+            papers = []
         elif chat_manager.mode in ["regenerate", "expand"]:
-            user_msg = chat_manager.previous_user_msg(history)
+            user_msg = chat_manager.fetch_user_msg(history)
             search_query = user_msg['search_query']
+            papers = user_msg['papers']
+            full_query += ' \n'.join(search_query.get(
+                'queries', ''))
+        elif chat_manager.mode in ["update"]:
+            user_msgs = [m for m in history if m.get(
+                'role') == "user" and m.get('search_query')]
+            search_query = [m['search_query'] for m in user_msgs]
+            papers = []
 
-        if search_query and chat_manager.mode in ["reply", "regenerate"]:
+        if search_query and chat_manager.mode in ["reply", "update", "regenerate"]:
+            search_queries = [search_query] if not isinstance(
+                search_query, list) else search_query
+
             startime = time.time()
             chat_manager.stream(" *Searching* ")
-            chat_manager.submit_search(
-                prefix_id=0,
-                query=search_query,
-                topK=topK, paperLock=paperLock
-            )
+            for k, search_query in enumerate(search_queries):
+                if (not search_query.get('queries', '')
+                    or not search_query.get('ethical', True)
+                        or not search_query.get('scientific', True)):
+                    continue
 
-            papers = []
-            papers = chat_manager.load_search_result(
-                prefix_id=0)
-            search_query['paperIds'] = [p['paperId'] for p in papers]
+                chat_manager.submit_search(
+                    prefix_id=k,
+                    query=search_query,
+                    topK=topK, paperLock=paperLock
+                )
+
+                paper_results = chat_manager.load_search_result(
+                    prefix_id=k)
+                paper_results = [
+                    p for p in paper_results if p['paperId'] not in search_query.get('paperIds', [])[2:]]
+
+                search_query['paperIds'].extend(
+                    [p['paperId'] for p in paper_results])
+                papers.extend(paper_results)
+                full_query += ' \n'.join(search_query.get('queries', '')) + ' \n'
 
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
+
+            if not chat_manager.mode in ["update"]:
+                search_query = search_queries[0]
+            else:
+                search_query = None
 
             for paper in papers:
                 chat_manager.save_chat_msg(
                     role="user", content=serialize_documents(paper)[0],
-                    model="search-worker", papers=None,
+                    model="search-worker", papers=None, msg_type=chat_manager.mode,
                     access="assistant", notebook_title=notebook_title
                 )
 
             chat_manager.save_chat_msg(
                 role="user", content=chat_manager.user_message,
-                model=model_name, papers=papers,
+                model=model_name, papers=papers, msg_type=chat_manager.mode,
                 access="all", notebook_title=notebook_title,
                 search_query=search_query,
             )
 
-        else:
-            user_msg = chat_manager.previous_user_msg(history)
-            papers = user_msg['papers']
-            search_query = user_msg['search_query']
-
-        ollama_streamers = []
-
-        if chat_manager.mode in ["reply", "regenerate"]:
-            if search_query:
-                full_query = ' \n'.join(search_query.get(
-                    'queries', chat_manager.user_message))
-            else:
-                full_query = chat_manager.user_message
-
-            ollama_streamers.append(
-                ollama_manager.generateQuickReply(query=full_query,
-                                                  documents=serialize_documents(papers))
-            )
-            sections = [{"title": '', }]
-            abstract = []
-        elif chat_manager.mode in ["expand"] and search_query:
+        if chat_manager.mode in ["expand"] and search_query:
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
-            if search_query:
-                full_query = ' \n'.join(search_query.get(
-                    'queries', chat_manager.user_message))
-            else:
-                full_query = chat_manager.user_message
-            generationPlan = await ollama_manager.generatePlan(query=full_query,
-                                                               documents=serialize_documents(papers))
-
+            generationPlan = await inference_manager.generatePlan(
+                query=full_query,
+                documents=serialize_documents(papers)
+            )
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
-
             sections = generationPlan.get('sections')
             abstract = generationPlan.get('abstract')
-            logger.info(sections)
-            for section in sections:
-                section_papers = [p for p in papers if p['paperId']
-                                  in section.get('paperIds', [])]
-                section['documents'] = serialize_documents(section_papers)
+            instruct = chat_config['instruct_gensection']
+        else:
+            paperIds = [p.get("paperId") for p in papers]
+            sections = [
+                {"title": "", "content": full_query, "paperIds": paperIds}]
+            abstract = []
+            if not chat_manager.mode in ["update"]:
+                instruct = chat_config['instruct_quickreply']
+            else:
+                instruct = chat_config['instruct_update']
+                if not papers:
+                    sections = []
 
-            ollama_streamers = []
-            for section in sections:
-                ollama_streamers.append(ollama_manager.generateSection(
-                    title=section['title'],
-                    content=section.get('scope', ''),
-                    documents=section['documents'],
-                    stream=True,
-                    temperature=0.5,
-                ))
+        logger.info(sections)
+        for section in sections:
+            section_papers = [p for p in papers if p['paperId']
+                              in section.get('paperIds', [])]
+            section['documents'] = serialize_documents(
+                section_papers,
+                include_abstract=chat_manager.mode in ["update"]
+            )
+
+        # Creating tasks for writers
+        llm_streamers = []
+        for section in sections:
+            llm_streamers.append(inference_manager.writer(
+                title=section['title'],
+                content=section.get('content', ''),
+                documents=section['documents'],
+                instruct=instruct,
+                stream=True,
+                temperature=0.5,
+            ))
 
         # queues = [asyncio.Queue() for _ in sections]
 
         # tasks = [
         #     asyncio.create_task(stream_to_queue(streamer, queue))
-        #     for streamer, queue in zip(ollama_streamers, queues)
+        #     for streamer, queue in zip(llm_streamers, queues)
         # ]
 
         full_response = ""
@@ -505,12 +538,12 @@ async def ollama_chat(payload, ollama_manager):
             full_response += f"\n\n{abstract}\n\n"
             chat_manager.stream(f"\n\n{abstract}\n\n")
         # for section, queue in zip(sections, queues):
-        for section, streamer in zip(sections, ollama_streamers):
-            buffer = ""
+        for section, streamer in zip(sections, llm_streamers):
+            # buffer = ""
             full_response += f"\n\n## {section['title']}\n\n"
             chat_manager.stream(f"\n\n## {section['title']}\n\n")
 
-            full_response += await ollama_manager.stream(streamer, chat_manager.stream_path)
+            full_response += await inference_manager.stream(streamer, chat_manager.stream_path)
 
             # async for chunk in streamer:
             #     # while True:
@@ -532,10 +565,12 @@ async def ollama_chat(payload, ollama_manager):
         # Final end signal
         chat_manager.stream("\n<END_OF_MESSAGE>\n")
 
-        chat_manager.save_chat_msg(
-            role="assistant", content=full_response, model=model_name,
-            papers=None, access="all", notebook_title=notebook_title,
-        )
+        if full_response:
+            chat_manager.save_chat_msg(
+                role="assistant", content=full_response,
+                model=model_name, msg_type=chat_manager.mode,
+                papers=None, access="all", notebook_title=notebook_title,
+            )
 
         logger.info(f"Streaming complete for task_id={task_id}")
 
@@ -554,11 +589,11 @@ async def ollama_chat(payload, ollama_manager):
 task_registry = {}
 
 
-async def worker_loop(ollama_manager):
+async def worker_loop(inference_manager):
     while True:
         payload = await message_queue.get()
         task_id = payload['task_id']
-        task = asyncio.create_task(ollama_chat(payload, ollama_manager))
+        task = asyncio.create_task(chat_process(payload, inference_manager))
         task_registry[task_id] = task
         task.add_done_callback(lambda t: task_registry.pop(task_id, None))
 
@@ -575,16 +610,16 @@ async def cancel_loop():
             logger.warning(f"Task {task_id} not found or already finished")
 
 
-async def chat_loops(ollama_manager):
+async def chat_loops(inference_manager):
     logger.info("Chat worker ready")
     await asyncio.gather(
-        worker_loop(ollama_manager),
+        worker_loop(inference_manager),
         cancel_loop()
     )
 
 
 def run_chat_worker():
-    ollama_manager = OllamaManager()
+    inference_manager = InferenceManager()
 
     KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
     CHAT_REQ_TOPIC = "notebook-requests"
@@ -606,7 +641,7 @@ def run_chat_worker():
     })
     consumer_cancel.subscribe([CHAT_CANCEL_TOPIC])
 
-    async_runner.run(ollama_manager.is_model_pulled())
+    async_runner.run(inference_manager.is_model_pulled())
 
     threading.Thread(target=kafka_poller,
                      args=(consumer, message_queue),
@@ -616,10 +651,10 @@ def run_chat_worker():
                      args=(consumer_cancel, cancel_queue),
                      daemon=True).start()
 
-    async_runner.run(chat_loops(ollama_manager))
+    async_runner.run(chat_loops(inference_manager))
 
 
-def serialize_documents(documents: List[dict]):
+def serialize_documents(documents: List[dict], include_abstract: bool = False):
     if not isinstance(documents, list):
         documents = [documents]
     serialized = []
@@ -632,6 +667,9 @@ def serialize_documents(documents: List[dict]):
             formatted_ref += f"Authors: {paper['authorName'].split(',', 1)[0]} et al.\n"
             formatted_ref += f"Date: {paper['publicationDate']}\n"
             # formatted_refs += f"  Main text: {paper['main_text']}\n\n"
+            if include_abstract:
+                formatted_ref += f"Abstract:\n"
+                formatted_ref += f"{paper['abstract']}\n"
             formatted_ref += f"Excerpt:\n"
             for chunk in paper['best_chunks'][:1]:
                 formatted_ref += f"'{chunk}'\n"
