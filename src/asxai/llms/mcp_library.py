@@ -3,11 +3,26 @@ from typing import Optional, List
 from datetime import datetime
 from dateutil.parser import parse as date_parse
 import json
+import re
 
 import config
 from asxai.logger import get_logger
 
 logger = get_logger(__name__, level=config.LOG_LEVEL)
+
+
+def parse_model_response(response):
+    think_labels = [('<think>', '</think>')]
+
+    for start_tag, end_tag in think_labels:
+        if start_tag in response and end_tag in response:
+            pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
+            think_match = re.search(pattern, response, flags=re.DOTALL)
+            think = think_match.group(1).strip() if think_match else ""
+            content = re.sub(pattern, "", response, flags=re.DOTALL).strip()
+            return {"content": content, "think": think}
+
+    return {"content": response.strip(), "think": ""}
 
 
 def parse_mcp_response(text: str):
@@ -76,7 +91,8 @@ class NotebookTitleMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
         key_map = {
             'title': ['title', 'topic', 'heading'],
         }
@@ -119,7 +135,8 @@ class QueryParseMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
         key_map = {
             'authorName': ['authorName', 'author', 'name'],
             'publicationDate_start': ['publicationDate_start', 'start'],
@@ -142,8 +159,10 @@ class ExpandQueryMCP(BaseModel):
         description="True or False; whether the user's question is ethically acceptable.")
     scientific: bool = Field(
         description="True or False; whether the user's question is 'scientific', i.e. in the scope of your expertise as a scientific assistant.")
+    details: bool = Field(
+        description="True or False; whether the user's question is explictely referring to a specific article mentioned in the conversation ")
     search_paperIds: bool = Field(
-        description="Article IDs of the articles the user explicitely refers to, returned as a list of strings if applicable or an empty list otherwise. ")
+        description="Article IDs of the articles the user is explicitely referring to, returned as a list of strings if applicable or an empty list otherwise. ")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -155,11 +174,13 @@ class ExpandQueryMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
         key_map = {
             'queries': ['sub_queries', 'questions', 'queries'],
             'scientific': ['scientific', 'search', 'needed'],
             'ethical': ['ethical', 'valid', 'acceptable'],
+            'details': ['details'],
             'search_paperIds': ['paperIds', 'search', 'paper'],
 
         }
@@ -185,7 +206,8 @@ class KeywordsMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
         key_map = {
             'research_field': ['research_field', 'research', 'field', 'discipline', 'domain'],
             'main_topics': ['main_topics', 'main', 'topics'],
@@ -220,7 +242,8 @@ class GenerationPlannerMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
 
         abstract = res.get('abstract', [])
         sections = res.get('sections', [])
@@ -279,7 +302,8 @@ class QuickReplyMCP(BaseModel):
 
     @classmethod
     def parse(cls, response):
-        res = parse_mcp_response(response)
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
         key_map = {
             'summary': ['summary', 'answer', 'response', 'reply'],
             'cited_papers': ['cited_papers', 'paperIds', 'papers', 'references'],

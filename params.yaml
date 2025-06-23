@@ -26,11 +26,27 @@ reranking:
   test_size: 0.2
   learning_rate: 0.0001
   
-ollama:
-  model_name: 'gemma3:12b' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
-  port: 11434
-  host: localhost
-  docker_timeout: 30.0
+llm:
+  model_name: 'groq/llama3-70b-8192' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
+  model_list:
+    - groq/llama3-70b-8192
+    - groq/llama3-8b-8192
+    - groq/meta-llama/llama-4-maverick-17b-128e-instruct
+    - groq/meta-llama/llama-4-scout-17b-16e-instruct
+    - groq/deepseek-r1-distill-llama-70b
+    - groq/gemma2-9b-it
+    - groq/llama-3.1-8b-instant
+    - groq/llama-3.3-70b-versatile
+    - groq/mistral-saba-24b
+    - groq/qwen-qwq-32b
+    - ollama/gemma3:12b
+    - ollama/gemma2:27b
+    - ollama/mistral-small:24b
+    - ollama/deepseek-r1:32b
+    - ollama/deepseek-r1:14b
+  ollama_port: 11434
+  ollama_host: localhost
+  client_timeout: 120.0
   watch_tmp_timeout: 60.0
   max_threads: 5
   expand_instruct: >
@@ -70,7 +86,7 @@ chat:
   summary_length: 100
   inference_service: groq
 
-  instruct_chatSummary: >
+  instruct_chatSummary: |
             You are a scientific assistant summarizing conversations.\n
             You are given a conversation recent history between a user and an assistant with summaries of older turns.\n
             Your task is to extract and summarize the key topics discussed in the recent history in <SUMMARY_LENGTH> words.\n
@@ -79,7 +95,7 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the conversation history with previous summaries:\n
             <HISTORY>
-  instruct_title: > 
+  instruct_title: | 
             You are a scientific assistant that generates short notebook titles.\n
             Given a user query, produce a short, clear, high-level title.\n
             Output format:
@@ -87,7 +103,7 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the original user's query:\n
             <QUERY>
-  instruct_parse: > 
+  instruct_parse: | 
             You are a a scientific query parser that parse queries and only return the requested fields as valid JSON.\n
             Parse the following search query to extract the cleaned query and the metadata it may contain.\n
             Specifically, identify and separate:\n
@@ -96,14 +112,15 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
-  instruct_expand: >
+  instruct_expand: |
             You are a scientific assistant helping users structure their research questions into actionable literature queries.\n
 
              Given the full conversation context and the user request, you must extract a search expansion plan:\n
             - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
             - Indicate whether the user's questions is acceptable in terms of ethical boundaries.\n
             - Indicate whether the user's question is in the scope of your domain of expertise as a scientific assistant.\n
-            - If the user's question is about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
+            - Indicate whether the user's question is explicitely restricted to an article mentioned previously in the conversation.\n
+            - If the user's question is explicitely about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
 
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
@@ -111,7 +128,7 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
-  instruct_keyword: >
+  instruct_keyword: |
             You are a research assistant helping classify scientific queries.\n
 
             For the given query:
@@ -135,7 +152,7 @@ chat:
   #           Output strictly valid JSON.\n
   #           Here is the original query:\n
   #           <QUERY>
-  instruct_genplan: >
+  instruct_genplan: |
             You are a generation planner for scientific answering.\n
             You receive:\n
             - The user's query.\n
@@ -156,7 +173,7 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here below is the user's query:\n
             <QUERY>
-  instruct_gensection: >
+  instruct_gensection: |
             You are a scientific writer generating an answer for a scientific section.\n\n
 
             You are given:\n
@@ -174,7 +191,7 @@ chat:
             Here below are the section title and scope:\n
             - Section Title: <TITLE>\n
             - Section Scope: <CONTENT>
-  instruct_quickreply: >
+  instruct_quickreply: |
             You are a scientific assistant generating a quick factual response to a user question.\n\n
 
             You are provided the user's expanded query.\n
@@ -189,6 +206,30 @@ chat:
             Answer directly to the user.
             Here is the user's query:\n
             <CONTENT>\n
+  instruct_editor: |
+            You are a **scientific editor** responsible for ensuring factual accuracy and scientific integrity.
+
+            You are given:
+            - A draft written by another AI (the "writer") based on retrieved scientific articles.
+            - The corresponding title or topic of this section.
+            - The articles, each identified by a unique `Article ID`, provided in the context.
+
+            Your job is to:
+            1. Carefully **verify each sentence** for factual accuracy and ensure it is **supported by one or more of the retrieved articles**.
+            2. **Edit the draft** to clearly attribute claims to the appropriate articles by inserting inline references like `[Article ID]` immediately after the relevant sentence or clause.
+            3. If a claim is **not supported** by the provided articles, you must either:
+              - Rephrase the sentence to reflect what is actually supported.
+              - Or clearly mark it with `[unsupported]` if no article supports it.
+            4. If multiple articles support the same idea, you may include multiple IDs, e.g., `[xxxx, xxxx]`.
+            5. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
+
+            Return the revised version of the draft with inline citations in square brackets, ensuring each scientific statement is either supported by the provided context or marked as unsupported.
+            Do not include the title.
+            Here's the writer's draft:
+            **Title**: <TITLE>
+            **Draft**: <CONTENT>
+           
+
   instruct_update: >
             You are a scientific assistant generating a short summary of new articles related to the past user's query.\n\n
 

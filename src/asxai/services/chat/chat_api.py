@@ -31,6 +31,7 @@ logger = get_logger(__name__, level=config.LOG_LEVEL)
 params = load_params()
 chat_config = params["chat"]
 search_config = params["search"]
+llm_config = params["llm"]
 
 KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
 CHAT_REQ_TOPIC = "notebook-requests"
@@ -369,7 +370,7 @@ async def abort_generation(notebook_id: str, decoded_token: dict = Depends(verif
 
 
 @app.post("/notebook/update")
-async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
+async def update_all_notebooks(model: str = 'default', decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     create_user(user_id)
 
@@ -394,7 +395,7 @@ async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
             "content": content,
             "search_query": None,
             "role": "user",
-            "model": "default",
+            "model": model,
             "topK": None,
             "paperLock": False,
             "mode": "reply",
@@ -415,8 +416,8 @@ async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
         while True:
             history = await Notebook_manager.load_history(task_id)
             if (history
-                and history[-1].get('timestamp_update', 0) > update_starttime
-                ):
+                        and history[-1].get('timestamp_update', 0) > update_starttime
+                    ):
                 if history[-1]['mode'] == "update":
                     updated_notebooks.append(notebook_id)
                 break
@@ -698,6 +699,12 @@ def generate_task_id(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
     print(user_id)
     return JSONResponse(content=create_task_id(user_id))
+
+
+@app.get("/notebook/models")
+async def get_model_list(decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    return JSONResponse(content={"model_list": llm_config["model_list"]})
 
 
 @app.get("/admin/delete_ghost_users")

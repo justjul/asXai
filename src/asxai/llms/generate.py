@@ -15,7 +15,7 @@ from dateutil.parser import parse
 from datetime import datetime
 
 from .mcp_library import QueryParseMCP, ExpandQueryMCP, KeywordsMCP, NotebookTitleMCP, ChatSummarizerMCP
-from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP
+from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP, parse_model_response
 
 from tqdm import tqdm
 from asxai.utils import load_params
@@ -28,45 +28,47 @@ logger = get_logger(__name__, level=config.LOG_LEVEL)
 params = load_params()
 embedding_config = params["embedding"]
 qdrant_config = params["qdrant"]
-ollama_config = params["ollama"]
+llm_config = params["llm"]
 chat_config = params["chat"]
 
 
 class InferenceManager:
     def __init__(self,
-                 model_name: str = ollama_config["model_name"],
-                 docker_timeout: float = ollama_config["docker_timeout"],
-                 watch_tmp_timeout: float = ollama_config["watch_tmp_timeout"],
-                 max_threads: int = ollama_config["max_threads"]):
+                 model_name: str = llm_config["model_name"],
+                 client_timeout: float = llm_config["client_timeout"],
+                 watch_tmp_timeout: float = llm_config["watch_tmp_timeout"],
+                 max_threads: int = llm_config["max_threads"]):
 
         self.container_name = "ollama"
         self.model_name = model_name
 
-        self.port = ollama_config["port"]
-        self.host = "ollama" if running_inside_docker(
-        ) else ollama_config["host"]
+        self.model_list = llm_config["model_list"]
+
+        self.ollama_port = llm_config["ollama_port"]
+        self.ollama_host = "ollama" if running_inside_docker(
+        ) else llm_config["host"]
 
         self.meta_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
                             'citationCount', 'influentialCitationCount',
                             'publicationDate', 'publicationYear'}
 
-        self.docker_timeout = docker_timeout
+        self.client_timeout = client_timeout
         self.watch_tmp_timeout = watch_tmp_timeout
         self.max_threads = max_threads
 
         self.is_ollama_running()
         self.client_ollama = AsyncClient(
-            host=f"http://{self.host}:{self.port}", timeout=120.0
+            host=f"http://{self.ollama_host}:{self.ollama_port}", timeout=client_timeout
         )
         self.client_groq = AsyncGroq(
-            api_key=os.getenv("GROQ_API_KEY"), timeout=120.0, max_retries=5
+            api_key=os.getenv("GROQ_API_KEY"), timeout=client_timeout, max_retries=5
         )
         self.semaphore = asyncio.Semaphore(self.max_threads)
 
     def is_ollama_running(self):
         ready = False
-        endtime = time.time() + self.docker_timeout
-        url = f"http://{self.host}:{self.port}"
+        endtime = time.time() + self.client_timeout
+        url = f"http://{self.ollama_host}:{self.ollama_port}"
         n_retry = 0
 
         while time.time() < endtime:
@@ -89,40 +91,59 @@ class InferenceManager:
 
     async def is_model_pulled(self):
         try:
-            model_list = await self.client_ollama.list()
-            models = model_list.models
-            available_models = [model.model for model in models]
+            if 'ollama' in self.model_name:
+                model_name = self.model_name.split('/', 1)[-1]
+                ollama_model_list = await self.client_ollama.list()
+                models = ollama_model_list.models
+                available_ollama_models = [model.model for model in models]
 
-            if self.model_name not in available_models:
-                logger.info(f"Pulling model '{self.model_name}'...")
-                await self.client_ollama.pull(self.model_name)
-                logger.info(f"Model '{self.model_name}' pulled successfully.")
-            else:
-                logger.debug(f"Model '{self.model_name}' already available.")
+                if model_name not in available_ollama_models:
+                    logger.info(f"Pulling model '{model_name}'...")
+                    await self.client_ollama.pull(model_name)
+                    logger.info(f"Model '{model_name}' pulled successfully.")
+                else:
+                    logger.debug(f"Model '{model_name}' already available.")
 
         except Exception as e:
             logger.error(
                 f"Failed to check/pull model '{self.model_name}': {e}")
 
     def resolve_model(self, override):
-        return self.model_name if override == "default" else override
+        model_name = self.model_name if override == "default" else override
+        if model_name not in llm_config['model_list']:
+            model_name = self.model_name
+        [provider, model_id] = model_name.split('/', 1)
+        return provider, model_id
 
-    async def stream(self, streamer, stream_path, provider=chat_config['inference_service']):
+    async def stream(self, streamer, stream_path):
         full_response = ""
+        think_response = ""
         buffer = ""
+        inside_think = False
         async for chunk in streamer:
-            if provider.lower() == "ollama":
+            if hasattr(chunk, "message"):
                 token = chunk["message"]["content"]
-            elif provider.lower() == "groq":
+            elif hasattr(chunk, "choices"):
                 token = chunk.choices[0].delta.content or ""
-            buffer += token
+
+            if "<think>" in token:
+                inside_think = True
+                continue
+            if "</think>" in token:
+                inside_think = False
+                continue
+
+            if not inside_think:
+                buffer += token
+                full_response += token
+            else:
+                think_response += token
 
             if len(buffer) > 100:
                 with open(stream_path, "a") as stream_file:
                     stream_file.write(buffer)
                     stream_file.flush()
                 buffer = ""
-            full_response += token
 
         # Write any remaining buffer
         if len(buffer) > 0:
@@ -130,10 +151,11 @@ class InferenceManager:
                 stream_file.write(buffer)
                 stream_file.flush()
 
-        return full_response
+        return {'content': full_response, 'think': think_response}
 
-    async def generate(self, messages, provider=chat_config['inference_service'], **kwargs):
-        model_name = self.resolve_model(kwargs.pop("model", "default"))
+    async def generate(self, messages, **kwargs):
+        provider, model_name = self.resolve_model(
+            kwargs.pop("model", "default"))
         stream = kwargs.pop("stream", False)
         if provider.lower() == "ollama":
             options = kwargs
@@ -148,8 +170,7 @@ class InferenceManager:
             async with self.semaphore:
                 if stream:
                     streamer = await self.client_groq.chat.completions.create(
-                        # "meta-llama/llama-4-scout-17b-16e-instruct",  # "llama3-8b-8192",#model_name
-                        model="llama3-70b-8192",
+                        model=model_name,
                         messages=messages,
                         stream=True,
                         **kwargs
@@ -157,28 +178,12 @@ class InferenceManager:
                     return streamer
                 else:
                     response = await self.client_groq.chat.completions.create(
-                        model="meta-llama/llama-4-scout-17b-16e-instruct",  # "llama3-8b-8192",#model_name
+                        model=model_name,
                         messages=messages,
                         stream=False,
                         **kwargs
                     )
                     return response.choices[0].message.content
-
-    async def generateQuickReply(self, query: str,
-                                 documents: str,
-                                 quick_instruct: str = chat_config['instruct_quickreply'],
-                                 **kwargs):
-        instruct = QuickReplyMCP.generate_prompt(quick_instruct)
-        prompt = instruct.replace("<QUERY>", query)
-
-        messages = [{'role': 'user', 'content': doc} for doc in documents]
-        messages += [{'role': 'user', 'content': prompt}]
-
-        kwargs.pop("stream", None)
-        streamer = await self.generate(messages=messages, stream=True, **kwargs)
-
-        async for chunk in streamer:
-            yield chunk
 
     async def generatePlan(self, query: str,
                            documents: str,
@@ -210,15 +215,6 @@ class InferenceManager:
                      context: List[dict] = None,
                      instruct: str = chat_config['instruct_gensection'],
                      **kwargs):
-        # if query:
-        #     logger.info("generating quick reply")
-        #     instruct = QuickReplyMCP.generate_prompt(quick_instruct)
-        #     prompt = instruct.replace("<QUERY>", query)
-        # elif content:
-        #     instruct = SectionGenerationMCP.generate_prompt(
-        #         gensection_instruct)
-        #     prompt = instruct.replace("<TITLE>", title)
-        #     prompt = instruct.replace("<CONTENT>", content)
 
         prompt = instruct.replace("<TITLE>", title)
         prompt = instruct.replace("<CONTENT>", content)
@@ -233,11 +229,14 @@ class InferenceManager:
                         for doc in documents])
         messages.extend([{'role': 'user', 'content': prompt}])
 
-        kwargs.pop("stream", None)
-        streamer = await self.generate(messages=messages, stream=True, **kwargs)
-
-        async for chunk in streamer:
-            yield chunk
+        stream = kwargs.pop("stream", False)
+        if stream:
+            streamer = await self.generate(messages=messages, stream=stream, **kwargs)
+            return streamer
+        else:
+            response = await self.generate(messages=messages, stream=stream, **kwargs)
+            res = parse_model_response(response)
+            return res
 
     async def generateTitle(self, query: str,
                             title_instruct: str = chat_config['instruct_title'],
@@ -254,7 +253,8 @@ class InferenceManager:
 
     async def chatSummarize(self, chat_history: list[dict],
                             chatSummary_instruct:  str = chat_config['instruct_chatSummary'],
-                            summary_len: int = chat_config['summary_length']) -> str:
+                            summary_len: int = chat_config['summary_length'],
+                            **kwargs) -> str:
         instruct = ChatSummarizerMCP.generate_prompt(chatSummary_instruct)
         instruct = instruct.replace("<SUMMARY_LENGTH>", str(summary_len))
 
@@ -275,10 +275,11 @@ class InferenceManager:
 
         messages = [{'role': 'user', 'content': prompt}]
 
-        response = await self.generate(messages=messages, temperature=0.0)
-        # result = parse_mcp_response(response)
+        temperature = kwargs.pop('temperature', 0.0)
+        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
+        res = parse_model_response(response)
 
-        return response
+        return res['content']
 
     async def processQuery(self, query: str, chat_history: List[dict],
                            expand_instruct: str = chat_config['instruct_expand'],
@@ -298,6 +299,9 @@ class InferenceManager:
         queries = result.get('queries', [])
         scientific = result.get('scientific', [])
         ethical = result.get('ethical', [])
+        details = result.get('details', [])
+        if not details:
+            result['search_paperIds'] = []
 
         # This is a temporary fix before we adjust search strategy with multiple questions:
         # We concatenate questions to deal with a single search per user's query.
@@ -360,8 +364,8 @@ class InferenceManager:
 
     async def expand_parse(self,
                            query: str,
-                           expand_instruct: str = ollama_config['expand_instruct'],
-                           parse_instruct: str = ollama_config['parse_instruct'],
+                           expand_instruct: str = llm_config['expand_instruct'],
+                           parse_instruct: str = llm_config['parse_instruct'],
                            **kwargs):
         expanded = await self.expand(query, expand_instruct=expand_instruct, **kwargs)
         result = await self.parse(expanded, parse_instruct=parse_instruct, **kwargs)
@@ -370,8 +374,8 @@ class InferenceManager:
     async def expand_parse_batch(self,
                                  queries: List[str],
                                  query_ids: List[int] = None,
-                                 expand_instruct: str = ollama_config['expand_instruct'],
-                                 parse_instruct: str = ollama_config['parse_instruct'],
+                                 expand_instruct: str = llm_config['expand_instruct'],
+                                 parse_instruct: str = llm_config['parse_instruct'],
                                  **kwargs):
         if not query_ids:
             query_ids = [k for k in range(len(queries))]

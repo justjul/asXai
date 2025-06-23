@@ -25,14 +25,18 @@ export default function ChatApp() {
   const { notebookId } = useParams();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [modelList, setModelList] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
   const [question, setQuestion] = useState('');
   const [topK, setTopK] = useState(5);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingNotebookIds, setStreamingNotebookIds] = useState(new Set());
   const streamingNotebookIdRef = useRef();
+  const streamingMsgIndexRef = useRef();
   const [updatedNotebookIds, setUpdatedNotebookIds] = useState(new Set())
   const [openFilterPanels, setOpenFilterPanels] = useState(new Set());
+  const [openReasoningPanels, setOpenReasoningPanels] = useState(new Set());
   const [papers, setPapers] = useState([]);
   const papersLoadingRef = useRef(false);
   const papersRef = useRef([]);
@@ -84,6 +88,21 @@ export default function ChatApp() {
     });
     return unsubscribe;
   }, [auth]);
+
+  useEffect(() => {
+    loadModelList();
+  }, []);
+
+  useEffect(() => {
+    if (modelList.length > 0) {
+      setSelectedModel((prev) => {
+        if (!prev || !modelList.includes(prev)) {
+          return modelList[0];
+        }
+        return prev;
+      });
+    }
+  }, [modelList]);
 
   const fetchNotebooks = async () => {
     try {
@@ -229,7 +248,9 @@ export default function ChatApp() {
       const res = await authFetch(
         user,
         `${API_URL}/notebook/new_task_id`,
-        { method: 'GET', headers: { 'Content-Type': 'application/json' } }
+          {method: 'GET', 
+          headers: { 'Content-Type': 'application/json' }
+        }
       );
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
       const data = await res.json();
@@ -248,7 +269,12 @@ export default function ChatApp() {
       const res = await authFetch(
         user,
         `${API_URL}/notebook/update`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+        { method: 'POST', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: selectedModel
+          }),
+        }
       );
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
       const data = await res.json();
@@ -298,6 +324,15 @@ export default function ChatApp() {
 
   const toggleFilterPanel = (queryId) => {
     setOpenFilterPanels(prev => {
+      const updated = new Set(prev);
+      if (updated.has(queryId)) updated.delete(queryId);
+      else updated.add(queryId);
+      return updated;
+    });
+  };
+
+  const toggleReasoningPanel = (queryId) => {
+    setOpenReasoningPanels(prev => {
       const updated = new Set(prev);
       if (updated.has(queryId)) updated.delete(queryId);
       else updated.add(queryId);
@@ -366,14 +401,14 @@ export default function ChatApp() {
     editedQuestion = null, 
     query_id = null, 
     mode = 'reply', 
-    search_query = null, 
+    search_query = null,
     nbId = null
   } = {}) => {
     const finalQuestion = editedQuestion ?? question;
     const notebookChatId = nbId ?? notebookId
 
     if (!finalQuestion.trim() && !query_id) return;
-    console.log(query_id)
+
     let queryId;
     console.log(query_id)
     try {
@@ -386,7 +421,8 @@ export default function ChatApp() {
           search_query,
           topK: topK,
           paperLock: lockArticleList,
-          mode: mode}),
+          mode: mode,
+          model: selectedModel}),
       });
       if (!res.ok) throw new Error('Failed to submit chat message');
       const data = await res.json();
@@ -398,20 +434,47 @@ export default function ChatApp() {
 
     if (notebookChatId === notebookId) {
       if (finalQuestion.trim()) {
-        setMessages((prev) => [
-          ...prev,
-          { role: 'user', content: finalQuestion, query_id: queryId },
-        ]);
+        setMessages((prev) => {
+          const existingIdx = prev.findIndex(
+            (msg) => msg.query_id === queryId && msg.role === 'user'
+          );
+
+          const newMessage = { role: 'user', content: finalQuestion, query_id: queryId };
+
+          if (existingIdx !== -1) {
+            const updated = [...prev];
+            updated[existingIdx] = newMessage;
+            return updated;
+          } else {
+            return [...prev, newMessage];
+          }
+        });
+
         setQuestion('');
       }
 
-      if (mode !== 'regenerate' && mode !== 'edit') {
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: '', query_id: queryId },
-        ]);
-        setQuestion('');
-      }
+      
+      setMessages((prev) => {
+        let insertAfterIdx;
+        if (mode !== 'expand') {
+          insertAfterIdx = prev.findIndex(msg => msg.query_id === queryId);
+        } else {
+          insertAfterIdx = prev.findLastIndex(msg => msg.query_id === queryId);
+        }
+        streamingMsgIndexRef.current = insertAfterIdx + 1;
+        if (insertAfterIdx !== -1) {
+          const newMessages = [...prev];
+          newMessages.splice(insertAfterIdx + 1, 0, {
+            role: 'assistant',
+            content: '',
+            query_id: queryId,
+          });
+          return newMessages;
+        } else {
+          return [...prev, { role: 'assistant', content: '', query_id: queryId }];
+        }
+      });
+      
     }
 
     streamAnswer(notebookChatId, queryId);
@@ -476,22 +539,22 @@ export default function ChatApp() {
 
               assistantResponse += '\n' + event.data;
               setMessages((prev) => {
-                const last = prev[prev.length - 1];
-                
-                let content = assistantResponse;
+                const newMessages = [...prev];
 
+                let content = assistantResponse;
                 if (papersRef.current.length > 0) {
                   content = linkifyPaperIds(content, papersRef.current);
                 }
 
-                if (last?.role === 'assistant') {
-                  return [
-                    ...prev.slice(0, -1),
-                    { role: 'assistant', content, query_id },
-                  ];
+                const idx = streamingMsgIndexRef.current;
+
+                if (idx !== undefined && idx >= 0 && idx < newMessages.length) {
+                  newMessages[idx] = { ...newMessages[idx], content };
                 } else {
-                  return [...prev, { role: 'assistant', content, query_id }];
+                  newMessages.push({ role: 'assistant', content, query_id });
                 }
+
+                return newMessages;
               });
             }
           }
@@ -536,6 +599,23 @@ export default function ChatApp() {
       return results;
     } catch (err) {
       console.error('Failed to load papers:', err);
+      setPapers([]);
+      return [];
+    }
+  };
+
+  const loadModelList = async () => {
+    try {
+      const res = await authFetch(
+        user,
+        `${API_URL}/notebook/models`,
+        { method: 'GET' }
+      );
+      if (!res.ok) throw new Error('Failed to load list of available models');
+      const data = await res.json();
+      setModelList(data.model_list);
+    } catch (err) {
+      console.error('Failed to load list of available models:', err);
       setPapers([]);
       return [];
     }
@@ -1173,6 +1253,30 @@ export default function ChatApp() {
             >
               {notebookTitle}
             </span>
+            <select
+              value={selectedModel}
+              onFocus={loadModelList}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              style={{
+                flex: 1,
+                maxWidth: '30%', // limit width so it fits between buttons
+                margin: '0 0.5rem',
+                borderRadius: '4px',
+                border: '1px solid var(--main-border)',
+                background: 'var(--main-bg)',
+                color: 'var(--main-font-color)',
+                fontFamily: 'inherit',
+                fontSize: '0.9rem',
+              }}
+              title="Select model"
+            >
+              <option value="">Select model</option>
+              {modelList.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
           </div>
           {/* Center: Logo */}
           <div style={{
@@ -1298,10 +1402,13 @@ export default function ChatApp() {
               >
               <div 
                 style={{ 
-                  // display: 'flex', 
-                  // alignItems: 'center', 
-                  gap: '0.5em',
-                  cursor:'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  alignItems: 'center',
+                  width: '100%', // make sure it spans the container
+                  padding: '0.0rem',
+                  marginTop: '0.5rem',
                 }}
                 onClick={e => msg.query_id && handleMessageClick(e, msg.query_id)}
               >
@@ -1313,7 +1420,35 @@ export default function ChatApp() {
                     verticalAlign: 'middle',
                   }}
                 />
+                {msg.role === 'assistant' && (
+                  <div 
+                    style={{ 
+                      fontSize: '0.7em',
+                      fontStyle: 'italic',
+                    }}
+                  >
+                  {msg.model?.split('/').at(-1) || 'unknown'}
+                  </div>
+                )}
               </div>
+                {msg.role === 'assistant' && openReasoningPanels.has(msg.query_id) && (
+                  <>
+                  <div
+                    style={{
+                      fontStyle: 'italic',
+                      fontFamily: 'var(--main-font)',
+                      fontSize: '0.75rem',
+                      display: 'block',
+                      marginTop: '0.2rem',
+                      marginBottom: '0.2rem',
+                    }}
+                  >
+                    Reasoning:
+                    {msg.think}
+                  </div>
+                </>
+              )}
+
               {msg.role === 'user' && editingMsg === msg.query_id ? (
                 <div>
                   <textarea
@@ -1399,6 +1534,7 @@ export default function ChatApp() {
 
 
                   {msg.role === 'user' &&
+                    msg.mode !== 'update' &&
                     <span
                       style={{
                         cursor: 'pointer',
@@ -1429,6 +1565,8 @@ export default function ChatApp() {
                       </span>
                   )}
                   {msg.role === 'assistant' &&
+                    msg.mode !== 'update' &&
+                      msg.mode !== 'expand' &&
                     <span
                       style={{
                         cursor: 'pointer',
@@ -1442,6 +1580,18 @@ export default function ChatApp() {
                       title="More detail"
                     >
                       🔎
+                    </span>
+                  }
+                  {msg.role === 'assistant' && msg?.think && 
+                    <span
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                      }}
+                      onClick={() => toggleReasoningPanel(msg.query_id)}
+                      title={openReasoningPanels.has(msg.query_id) ? 'Hide Reasoning' : 'Show Reasoning'}
+                    >
+                      {openReasoningPanels.has(msg.query_id) ? 'ᝰ.ᐟ' : '𖡎'}
                     </span>
                   }
                 </div>

@@ -86,7 +86,6 @@ class ChatManager:
         self.topK = payload["topK"]
         self.paperLock = payload["paperLock"]
         self.mode = payload["mode"]
-        self.model_name = inference_manager.resolve_model(self.model_name)
         self.chat_path = os.path.join(
             config.USERS_ROOT, f"{self.task_id}.chat.json")
         self.search_path = os.path.join(
@@ -189,6 +188,7 @@ class ChatManager:
             self, role, content,
             model, papers, access,
             mode,
+            think=None,
             notebook_title=None,
             search_query=None,
             append=True
@@ -203,6 +203,7 @@ class ChatManager:
         new_msg = {**base_msg,
                    "role": role,
                    "content": content,
+                   "think": think,
                    "model": model,
                    "mode": mode,
                    "papers": papers,
@@ -377,7 +378,6 @@ async def chat_process(payload, inference_manager):
         model_name = payload.get("model", inference_manager.model_name)
         topK = payload["topK"]
         paperLock = payload["paperLock"]
-        model_name = inference_manager.resolve_model(model_name)
 
         if payload["content"].lower() == "*notebook update*":
             logger.info("UPDATE MODE")
@@ -402,7 +402,10 @@ async def chat_process(payload, inference_manager):
         async_runner.submit(chat_manager.update_summaries(history, summaries))
 
         if not context:
-            title_response = await inference_manager.generateTitle(query=chat_manager.user_message)
+            title_response = await inference_manager.generateTitle(
+                query=chat_manager.user_message,
+                model=model_name
+            )
             notebook_title = title_response['title']
         else:
             notebook_title = context[-1].get('notebook_title',
@@ -414,8 +417,11 @@ async def chat_process(payload, inference_manager):
             if not search_query:
                 startime = time.time()
                 chat_manager.stream(" *Processing query* ")
-                search_query = await inference_manager.processQuery(query=chat_manager.user_message,
-                                                                    chat_history=context)
+                search_query = await inference_manager.processQuery(
+                    query=chat_manager.user_message,
+                    chat_history=context,
+                    model=model_name
+                )
                 chat_manager.stream(f"*{round(time.time() - startime)}s*")
             search_query['paperIds'] = []
             search_query['topK'] = topK
@@ -486,21 +492,22 @@ async def chat_process(payload, inference_manager):
             chat_manager.stream(" *Generating Plan*")
             generationPlan = await inference_manager.generatePlan(
                 query=full_query,
-                documents=serialize_documents(papers)
+                documents=serialize_documents(papers),
+                model=model_name
             )
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
             sections = generationPlan.get('sections')
             abstract = generationPlan.get('abstract')
-            instruct = chat_config['instruct_gensection']
+            instruct_writer = chat_config['instruct_gensection']
         else:
             paperIds = [p.get("paperId") for p in papers]
             sections = [
                 {"title": "", "content": full_query, "paperIds": paperIds}]
             abstract = []
             if not chat_manager.mode in ["update"]:
-                instruct = chat_config['instruct_quickreply']
+                instruct_writer = chat_config['instruct_quickreply']
             else:
-                instruct = chat_config['instruct_update']
+                instruct_writer = chat_config['instruct_update']
                 if not papers:
                     sections = []
 
@@ -513,17 +520,50 @@ async def chat_process(payload, inference_manager):
                 include_abstract=chat_manager.mode in ["update"]
             )
 
-        # Creating tasks for writers
-        llm_streamers = []
+        startime = time.time()
+        chat_manager.stream(" *Writing & editing Drafts*")
+
+        full_response = ""
+        think_response = ""
+        if abstract:
+            full_response += f"\n\n{abstract}\n\n"
+            chat_manager.stream(f"\n\n{abstract}\n\n")
+
         for section in sections:
-            llm_streamers.append(inference_manager.writer(
+            draft = await inference_manager.writer(
                 title=section['title'],
                 content=section.get('content', ''),
                 documents=section['documents'],
-                instruct=instruct,
-                stream=True,
+                instruct=instruct_writer,
+                stream=False,  # True,
+                model=model_name,
                 temperature=0.5,
-            ))
+            )
+            section['content'] = draft['content']
+            logger.info(section['content'])
+            # llm_streamers.append(streamer)
+
+            streamer = await inference_manager.writer(
+                title=section['title'],
+                content=section.get('content', ''),
+                documents=section['documents'],
+                instruct=chat_config['instruct_editor'],
+                stream=True,
+                model=model_name,
+                temperature=0.5,
+            )
+
+            full_response += f"\n\n## {section['title']}\n\n"
+            chat_manager.stream(f"\n\n## {section['title']}\n\n")
+
+            response = await inference_manager.stream(
+                streamer,
+                chat_manager.stream_path,
+            )
+            full_response += response['content']
+            think_response += response['think']
+
+        chat_manager.stream("\n<END_OF_MESSAGE>\n")
 
         # queues = [asyncio.Queue() for _ in sections]
 
@@ -532,41 +572,47 @@ async def chat_process(payload, inference_manager):
         #     for streamer, queue in zip(llm_streamers, queues)
         # ]
 
-        full_response = ""
-        if abstract:
-            full_response += f"\n\n{abstract}\n\n"
-            chat_manager.stream(f"\n\n{abstract}\n\n")
-        # for section, queue in zip(sections, queues):
-        for section, streamer in zip(sections, llm_streamers):
-            # buffer = ""
-            full_response += f"\n\n## {section['title']}\n\n"
-            chat_manager.stream(f"\n\n## {section['title']}\n\n")
+        # full_response = ""
+        # think_response = ""
+        # if abstract:
+        #     full_response += f"\n\n{abstract}\n\n"
+        #     chat_manager.stream(f"\n\n{abstract}\n\n")
+        # # for section, queue in zip(sections, queues):
+        # for section, streamer in zip(sections, llm_streamers):
+        #     # buffer = ""
+        #     full_response += f"\n\n## {section['title']}\n\n"
+        #     chat_manager.stream(f"\n\n## {section['title']}\n\n")
 
-            full_response += await inference_manager.stream(streamer, chat_manager.stream_path)
+        #     response = await inference_manager.stream(
+        #         streamer,
+        #         chat_manager.stream_path,
+        #     )
+        #     full_response += response['content']
+        #     think_response += response['think']
 
-            # async for chunk in streamer:
-            #     # while True:
-            #     #     chunk = await queue.get()
-            #     # if chunk is None:  # Stream finished
-            #     #     break
-            #     token = chunk["message"]["content"]
-            #     buffer += token
+        #     # async for chunk in streamer:
+        #     #     # while True:
+        #     #     #     chunk = await queue.get()
+        #     #     # if chunk is None:  # Stream finished
+        #     #     #     break
+        #     #     token = chunk["message"]["content"]
+        #     #     buffer += token
 
-            #     if len(buffer) > 100:
-            #         chat_manager.stream(buffer)
-            #         buffer = ""
-            #     full_response += token
+        #     #     if len(buffer) > 100:
+        #     #         chat_manager.stream(buffer)
+        #     #         buffer = ""
+        #     #     full_response += token
 
-            # # Write any remaining buffer
-            # if len(buffer) > 0:
-            #     chat_manager.stream(buffer)
+        #     # # Write any remaining buffer
+        #     # if len(buffer) > 0:
+        #     #     chat_manager.stream(buffer)
 
-        # Final end signal
-        chat_manager.stream("\n<END_OF_MESSAGE>\n")
+        # # Final end signal
+        # chat_manager.stream("\n<END_OF_MESSAGE>\n")
 
         if full_response:
             chat_manager.save_chat_msg(
-                role="assistant", content=full_response,
+                role="assistant", content=full_response, think=think_response,
                 model=model_name, mode=chat_manager.mode,
                 papers=None, access="all", notebook_title=notebook_title,
             )
