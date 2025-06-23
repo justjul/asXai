@@ -188,7 +188,7 @@ class ChatManager:
     def save_chat_msg(
             self, role, content,
             model, papers, access,
-            msg_type,
+            mode,
             notebook_title=None,
             search_query=None,
             append=True
@@ -204,7 +204,7 @@ class ChatManager:
                    "role": role,
                    "content": content,
                    "model": model,
-                   "msg_type": msg_type,
+                   "mode": mode,
                    "papers": papers,
                    "access":  access,
                    "search_query": search_query,
@@ -251,7 +251,7 @@ class ChatManager:
             "notebook_id": self.notebook_id,
             "model": "summarizer",
             "access": "assistant",
-            "msg_type": "summary",
+            "mode": "summary",
             "query_id": self.query_id,
             "papers": None,
             "notebook_title": self.notebook_title
@@ -339,7 +339,6 @@ class ChatManager:
                 try:
                     res = requests.get(
                         f"{SEARCH_API_URL}/search/{self.task_id}/{search_query_id}").json()
-                    print(res)
                     res = res['notebook']
                     if (res and search_query_id in {r['query_id'] for r in res}):
                         break
@@ -379,7 +378,7 @@ async def chat_process(payload, inference_manager):
         topK = payload["topK"]
         paperLock = payload["paperLock"]
         model_name = inference_manager.resolve_model(model_name)
-        print(payload["content"])
+
         if payload["content"].lower() == "*notebook update*":
             logger.info("UPDATE MODE")
             payload["mode"] = "update"
@@ -448,7 +447,7 @@ async def chat_process(payload, inference_manager):
                 chat_manager.submit_search(
                     prefix_id=k,
                     query=search_query,
-                    topK=topK, paperLock=paperLock
+                    topK=search_query['topK'], paperLock=paperLock
                 )
 
                 paper_results = chat_manager.load_search_result(
@@ -471,13 +470,13 @@ async def chat_process(payload, inference_manager):
             for paper in papers:
                 chat_manager.save_chat_msg(
                     role="user", content=serialize_documents(paper)[0],
-                    model="search-worker", papers=None, msg_type=chat_manager.mode,
+                    model="search-worker", papers=None, mode=chat_manager.mode,
                     access="assistant", notebook_title=notebook_title
                 )
 
             chat_manager.save_chat_msg(
                 role="user", content=chat_manager.user_message,
-                model=model_name, papers=papers, msg_type=chat_manager.mode,
+                model=model_name, papers=papers, mode=chat_manager.mode,
                 access="all", notebook_title=notebook_title,
                 search_query=search_query,
             )
@@ -568,7 +567,7 @@ async def chat_process(payload, inference_manager):
         if full_response:
             chat_manager.save_chat_msg(
                 role="assistant", content=full_response,
-                model=model_name, msg_type=chat_manager.mode,
+                model=model_name, mode=chat_manager.mode,
                 papers=None, access="all", notebook_title=notebook_title,
             )
 
@@ -582,6 +581,8 @@ async def chat_process(payload, inference_manager):
     finally:
         chat_manager.delete_stream()
         await Notebook_manager.chat_cleanup(task_id)
+        if chat_manager.mode in ["update"]:
+            await Notebook_manager.set_update_time(task_id)
 
     return full_response
 

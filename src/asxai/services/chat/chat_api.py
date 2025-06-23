@@ -378,11 +378,11 @@ async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
     if not notebook_list:
         raise HTTPException(status_code=404, detail="No notebooks found")
 
+    update_starttime = time.time()
     content = "*notebook update*"
     # Update each notebook
-    for notebook in notebook_list[0:1]:
+    for notebook in notebook_list:
         notebook_id = notebook["id"]
-        print(notebook_id)
         query_id = hash_id(notebook_id + content + str(time.time()))
         task_id = f"{user_id}/{notebook_id}"
 
@@ -407,7 +407,24 @@ async def update_all_notebooks(decoded_token: dict = Depends(verify_token)):
 
     producer.flush()
 
-    return JSONResponse(content={"status": "submitted", "notebooks_updated": len(notebook_list)})
+    updated_notebooks = []
+    for notebook in notebook_list:
+        notebook_id = notebook["id"]
+        task_id = f"{user_id}/{notebook_id}"
+        endtime = time.time() + 20
+        while True:
+            history = await Notebook_manager.load_history(task_id)
+            if (history
+                and history[-1].get('timestamp_update', 0) > update_starttime
+                ):
+                if history[-1]['mode'] == "update":
+                    updated_notebooks.append(notebook_id)
+                break
+            if time.time() > endtime:
+                break
+            time.sleep(1)
+
+    return JSONResponse(content={"status": "submitted", "updated_notebooks": updated_notebooks})
 
 
 @app.get("/notebook/{notebook_id}/chat/final")

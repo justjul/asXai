@@ -31,6 +31,7 @@ export default function ChatApp() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingNotebookIds, setStreamingNotebookIds] = useState(new Set());
   const streamingNotebookIdRef = useRef();
+  const [updatedNotebookIds, setUpdatedNotebookIds] = useState(new Set())
   const [openFilterPanels, setOpenFilterPanels] = useState(new Set());
   const [papers, setPapers] = useState([]);
   const papersLoadingRef = useRef(false);
@@ -109,7 +110,7 @@ export default function ChatApp() {
     if (notebooks.length === 0) {
       fetchNotebooks();
     }
-  }, [notebookId, lastNotebookCreated, notebooks.length]);
+  }, [notebookId, lastNotebookCreated, notebooks.length, updatedNotebookIds]);
 
 
   useEffect(() => {
@@ -143,7 +144,7 @@ export default function ChatApp() {
 
   useEffect(() => {
     refreshMessages();
-  }, [notebookId, notebooks, user]);
+  }, [notebookId, notebooks, user, updatedNotebookIds]);
 
   useEffect(() => {
     if (autoScroll && messagesEndRef.current) {
@@ -241,7 +242,7 @@ export default function ChatApp() {
     }
   };
 
-
+  
   const updateAllNotebook = async () => {
     try {
       const res = await authFetch(
@@ -250,6 +251,12 @@ export default function ChatApp() {
         { method: 'POST', headers: { 'Content-Type': 'application/json' } }
       );
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
+      const data = await res.json();
+      if (Array.isArray(data['updated_notebooks'])) {
+        setUpdatedNotebookIds(new Set(data['updated_notebooks']));
+      } else {
+        console.error("Invalid format for updated_notebooks:", data['updated_notebooks']);
+      }
     } catch (err) {
       console.error("Failed to update notebooks:", err);
     }
@@ -361,7 +368,7 @@ export default function ChatApp() {
     mode = 'reply', 
     search_query = null, 
     nbId = null
-  }) => {
+  } = {}) => {
     const finalQuestion = editedQuestion ?? question;
     const notebookChatId = nbId ?? notebookId
 
@@ -881,10 +888,11 @@ export default function ChatApp() {
                       border: 'none',
                       borderRadius: "4px",
                       background: 'var(--main-bg)',
+                      color: 'var(--main-font-color)',
                     }}
                     title="Update all Notebooks"
                   >
-                    🔔
+                    ↻
                   </button>
                 </div>
                 {notebooks.map((nb) => (
@@ -907,11 +915,17 @@ export default function ChatApp() {
                     <span
                       onClick={() => {
                         navigate(`/n/${nb.id}`)
+                        setUpdatedNotebookIds(prev => {
+                          const next = new Set(prev);
+                          next.delete(nb.id);
+                          return next;
+                        });
                         if (isMobile) setLeftCollapsed(true);
                       }}
                       style={{ cursor: 'pointer', flex: 1 }}
                     >
                       {nb.title}
+                      {updatedNotebookIds.has(nb.id) && <sup style={{ marginLeft: '0.3em', fontSize: '0.5em' }}>🔴</sup>}
                     </span>
 
                     <div style={{ position: 'relative' }}>
@@ -1244,7 +1258,7 @@ export default function ChatApp() {
             }} ref={chatContainerRef}>
           {messages.map((msg, idx) => {
             const isSelected = msg.query_id && selectedQueryIds.has(msg.query_id);
-            const isUpdate = msg?.msg_type === "update";
+            const isUpdate = msg?.mode === "update";
 
             const backgroundColor = isSelected
               ? 'var(--main-fg-sel)'

@@ -108,7 +108,7 @@ class NotebookManager:
         with open(chat_path, "w") as f:
             json.dump(new_history, f)
 
-        self.search_cleanup(task_id)
+        await self.search_cleanup(task_id)
 
         return len(history) - len(new_history)
 
@@ -179,9 +179,26 @@ class NotebookManager:
         with open(chat_path, "w") as f:
             json.dump(new_history, f)
 
-        self.search_cleanup(task_id)
+        await self.search_cleanup(task_id)
 
         return len(history) - len(new_history)
+
+    async def set_update_time(self, task_id):
+        chat_path = self.get_chat_path(task_id)
+        if not os.path.isfile(chat_path):
+            return 0
+
+        update_timestamp = time.time()
+        with open(chat_path, "r") as f:
+            chat_history = json.load(f)
+
+        for m in chat_history:
+            m['timestamp_update'] = update_timestamp
+
+        with open(chat_path, "w") as f:
+            json.dump(chat_history, f)
+
+        return update_timestamp
 
     async def chat_cleanup(self, task_id):
         chat_path = self.get_chat_path(task_id)
