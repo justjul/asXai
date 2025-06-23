@@ -530,28 +530,40 @@ async def chat_process(payload, inference_manager):
             chat_manager.stream(f"\n\n{abstract}\n\n")
 
         for section in sections:
-            draft = await inference_manager.writer(
-                title=section['title'],
-                content=section.get('content', ''),
-                documents=section['documents'],
-                instruct=instruct_writer,
-                stream=False,  # True,
-                model=model_name,
-                temperature=0.5,
-            )
-            section['content'] = draft['content']
-            logger.info(section['content'])
-            # llm_streamers.append(streamer)
-
             streamer = await inference_manager.writer(
                 title=section['title'],
                 content=section.get('content', ''),
                 documents=section['documents'],
-                instruct=chat_config['instruct_editor'],
-                stream=True,
+                instruct=instruct_writer,
+                stream=True,  # False,  # True,
                 model=model_name,
                 temperature=0.5,
             )
+            # section['content'] = draft['content']
+            # logger.info(section['content'])
+
+            # draft = await inference_manager.writer(
+            #     title=section['title'],
+            #     content=section.get('content', ''),
+            #     documents=section['documents'],
+            #     instruct=instruct_writer,
+            #     stream=False,  # True,
+            #     model=model_name,
+            #     temperature=0.5,
+            # )
+            # section['content'] = draft['content']
+            # logger.info(section['content'])
+            # # llm_streamers.append(streamer)
+
+            # streamer = await inference_manager.writer(
+            #     title=section['title'],
+            #     content=section.get('content', ''),
+            #     documents=section['documents'],
+            #     instruct=chat_config['instruct_editor'],
+            #     stream=True,
+            #     model=model_name,
+            #     temperature=0.5,
+            # )
 
             full_response += f"\n\n## {section['title']}\n\n"
             chat_manager.stream(f"\n\n## {section['title']}\n\n")
