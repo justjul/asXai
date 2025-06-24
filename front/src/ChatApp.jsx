@@ -31,6 +31,7 @@ export default function ChatApp() {
   const [topK, setTopK] = useState(5);
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingStage, setStreamingStage] = useState('done'); //'generating', 'editing' or 'done'
   const [streamingNotebookIds, setStreamingNotebookIds] = useState(new Set());
   const streamingNotebookIdRef = useRef();
   const streamingMsgIndexRef = useRef();
@@ -490,6 +491,7 @@ export default function ChatApp() {
 
     const startStreaming = async () => {
       setIsStreaming(true);
+      setStreamingStage('generating');
       setStreamingNotebookIds(prev => {
         const next = new Set(prev);
         next.add(notebookStreamId);
@@ -514,6 +516,16 @@ export default function ChatApp() {
         const parser = createParser({
           onEvent: (event) => {
             if (streamingNotebookIdRef.current !== notebookId) return;
+            
+            if (event.data === '<EDITING>') {
+              setStreamingStage('editing');
+              return; 
+            }
+
+            if (event.data === '<CLEAR>') {
+              assistantResponse = '';
+              return; 
+            }
             
             if (event.data) {
               if (!papersLoadingRef.current && papersRef.current.length === 0 && assistantResponse.length > 100) {
@@ -577,6 +589,7 @@ export default function ChatApp() {
       } finally {
         if (retryCount === 0 || success) {
           setIsStreaming(false)
+          setStreamingStage('done');
           setStreamingNotebookIds(prev => {
             const next = new Set(prev);
             next.delete(notebookStreamId);
@@ -1582,7 +1595,7 @@ export default function ChatApp() {
                       🔎
                     </span>
                   }
-                  {msg.role === 'assistant' && msg?.think && 
+                  {msg.role === 'assistant' && msg.think.length > 20 && 
                     <span
                       style={{
                         cursor: 'pointer',
@@ -1771,7 +1784,7 @@ export default function ChatApp() {
           <textarea
             value={question}
             onChange={e => setQuestion(e.target.value)}
-            placeholder="Ask a question..."
+            placeholder= {(streamingNotebookIds.has(notebookId) && isStreaming) ? streamingStage : "Ask a question..."}
             rows={2}
             style={{
               background: 'var(--main-bg)',

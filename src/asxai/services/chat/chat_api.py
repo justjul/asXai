@@ -313,7 +313,7 @@ def stream_response(notebook_id: str, decoded_token: dict = Depends(verify_token
         stream_path = os.path.join(config.USERS_ROOT, f"{task_id}.stream")
 
         # Wait for the file to be created
-        endtime = time.time() + 60
+        endtime = time.time() + 120
         while not os.path.exists(stream_path):
             time.sleep(0.1)
             if time.time() > endtime:

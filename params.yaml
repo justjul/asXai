@@ -221,10 +221,11 @@ chat:
               - Rephrase the sentence to reflect what is actually supported.
               - Or clearly mark it with `[unsupported]` if no article supports it.
             4. If multiple articles support the same idea, you may include multiple IDs, e.g., `[xxxx, xxxx]`.
-            5. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
+            5. If article IDs mentioned by the writer are incorrect, replace them with the correct ones.
+            6. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
 
-            Return the revised version of the draft with inline citations in square brackets, ensuring each scientific statement is either supported by the provided context or marked as unsupported.
-            Do not include the title.
+            Return only your edited version of the draft (no introductory sentence).
+            Do not include the title or anything else than the edited version.
             Here's the writer's draft:
             **Title**: <TITLE>
             **Draft**: <CONTENT>

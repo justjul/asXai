@@ -115,7 +115,7 @@ class InferenceManager:
         [provider, model_id] = model_name.split('/', 1)
         return provider, model_id
 
-    async def stream(self, streamer, stream_path):
+    async def stream_to_file(self, streamer, stream_path):
         full_response = ""
         think_response = ""
         buffer = ""
@@ -152,6 +152,50 @@ class InferenceManager:
                 stream_file.flush()
 
         return {'content': full_response, 'think': think_response}
+
+    async def stream_to_queue(self, streamer, queue: asyncio.Queue):
+        full_response = ""
+        think_response = ""
+        buffer = ""
+        think_buffer = ""
+        inside_think = False
+        async for chunk in streamer:
+            if hasattr(chunk, "message"):
+                token = chunk["message"]["content"]
+            elif hasattr(chunk, "choices"):
+                token = chunk.choices[0].delta.content or ""
+
+            if "<think>" in token:
+                inside_think = True
+                continue
+            if "</think>" in token:
+                inside_think = False
+                continue
+
+            if not inside_think:
+                buffer += token
+                full_response += token
+            else:
+                think_buffer += token
+                think_response += token
+
+            if len(buffer) > 100 or len(think_buffer) > 100:
+                await queue.put({'content': buffer, 'think': think_buffer})
+                buffer = ""
+                think_buffer = ""
+
+        # Write any remaining buffer
+        if len(buffer) > 0 or len(think_buffer) > 0:
+            await queue.put({'content': buffer, 'think': think_buffer})
+
+        await queue.put(None)
+
+    async def response_to_queue(self, coro, queue):
+        try:
+            response = await coro
+            await queue.put(response)
+        except Exception as e:
+            await queue.put(e)
 
     async def generate(self, messages, **kwargs):
         provider, model_name = self.resolve_model(
