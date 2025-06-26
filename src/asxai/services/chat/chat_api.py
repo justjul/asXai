@@ -13,7 +13,7 @@ from fastapi import FastAPI,  Request, HTTPException
 import uvicorn
 import hashlib
 from pydantic import BaseModel
-from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi.responses import StreamingResponse, Response, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from confluent_kafka import Producer, Consumer
 
@@ -426,6 +426,22 @@ async def update_all_notebooks(model: str = 'default', decoded_token: dict = Dep
             time.sleep(1)
 
     return JSONResponse(content={"status": "submitted", "updated_notebooks": updated_notebooks})
+
+
+@app.get("/notebook/{notebook_id}/references.txt")
+async def download_references(notebook_id: str, style: str = 'nature', decoded_token: dict = Depends(verify_token)):
+    user_id = safe_user_id(decoded_token["uid"])
+    task_id = f"{user_id}/{notebook_id}"
+
+    logger.info(f"will download references for {task_id}")
+    ref_list, doi_list = await Notebook_manager.get_citation_list(task_id, style=style)
+
+    logger.info(f"Downloaded ref: {ref_list}")
+    headers = {
+        "Content-Disposition": 'attachment; filename="references.txt"',
+        "Content-Type":       "text/plain; charset=utf-8",
+    }
+    return JSONResponse(content={'references': ref_list, 'dois': doi_list}, headers=headers)
 
 
 @app.get("/notebook/{notebook_id}/chat/final")

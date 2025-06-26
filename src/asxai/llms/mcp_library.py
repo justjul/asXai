@@ -33,24 +33,6 @@ def parse_mcp_response(text: str):
         json_block = json_block.replace("None", "null")
         dic = json.loads(json_block)
         norm_dic = dic
-        # default = datetime(1, 1, 1)  # defaults everything to Jan 1
-
-        # def safe(val):
-        #     try:
-        #         parse(val, default=default).strftime("%Y-%m-%d")
-        #         return True
-        #     except Exception:
-        #         return False
-
-        # norm_dic = {'query': next((val for key, val in dic.items() if 'query' in key and val != 'null'), None),
-        #             'cleaned_query': next((val for key, val in dic.items() if 'cleaned' in key and val != 'null'), None),
-        #             'authorName': next((val for key, val in dic.items() if 'author' in key and val != 'null'), None),
-        #             'publicationDate_start': next(
-        #                 (parse(val, default=default).strftime("%Y-%m-%d")
-        #                  for key, val in dic.items() if 'start' in key and safe(val)), None),
-        #             'publicationDate_end': next(
-        #                 (parse(val, default=default).strftime("%Y-%m-%d")
-        #                  for key, val in dic.items() if 'end' in key and safe(val)), None)}
 
         return norm_dic
     except (ValueError, json.JSONDecodeError) as e:
@@ -154,15 +136,22 @@ class QueryParseMCP(BaseModel):
 class ExpandQueryMCP(BaseModel):
     queries: List[str] = Field(
         description="A list of 1-3 specific questions that collectively cover the user's query, returned as a list of strings."
-        + "Each should be a clear, concise, and full sentence, suitable for retrieving relevant scientific documents.\n")
+        + "Each should be a clear, concise, and full sentence, suitable for retrieving relevant scientific documents.\n"
+    )
     ethical: bool = Field(
-        description="True or False; whether the user's question is ethically acceptable.")
+        description="True or False; whether the user's question is ethically acceptable."
+    )
     scientific: bool = Field(
         description="True or False; whether the user's question is 'scientific', i.e. in the scope of your expertise as a scientific assistant.")
+    cite_only: bool = Field(
+        description="True or False; whether the user's is explicitely asking to insert citation in the provided text."
+    )
     details: bool = Field(
-        description="True or False; whether the user's question is explictely referring to a specific article mentioned in the conversation ")
+        description="True or False; whether the user's question is explicitely referring to a specific article mentioned in the conversation."
+    )
     search_paperIds: bool = Field(
-        description="Article IDs of the articles the user is explicitely referring to, returned as a list of strings if applicable or an empty list otherwise. ")
+        description="Article IDs of the articles the user is explicitely referring to, returned as a list of strings if applicable or an empty list otherwise. "
+    )
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -179,6 +168,7 @@ class ExpandQueryMCP(BaseModel):
         key_map = {
             'queries': ['sub_queries', 'questions', 'queries'],
             'scientific': ['scientific', 'search', 'needed'],
+            'cite_only': ['cite', 'citation', 'insert'],
             'ethical': ['ethical', 'valid', 'acceptable'],
             'details': ['details'],
             'search_paperIds': ['paperIds', 'search', 'paper'],

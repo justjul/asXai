@@ -2,6 +2,8 @@ import os
 import json
 import shutil
 import time
+import urllib
+from urllib.error import HTTPError
 
 
 class NotebookManager:
@@ -182,6 +184,66 @@ class NotebookManager:
         await self.search_cleanup(task_id)
 
         return len(history) - len(new_history)
+
+    async def build_formatted_citation(self, doi_url, style='nature', get_json=False, verbose=True):
+        BASE_URL = 'https://doi.org/'
+        bibtex = None
+
+        if len(doi_url) == 0:
+            return None
+
+        if not doi_url.startswith('http'):
+            doi_url = BASE_URL + doi_url
+
+        if BASE_URL not in doi_url:
+            raise ValueError("Incorrect doi_url: {}! It might starts with {}".format(
+                doi_url, BASE_URL))
+
+        req = urllib.request.Request(doi_url)
+
+        if get_json:
+            args = "application/citeproc+json"
+        else:
+            args = "text/bibliography; style={style}".format(style=style)
+
+        req.add_header('Accept', args)
+
+        try:
+            with urllib.request.urlopen(req) as f:
+                bibtex = f.read().decode('utf-8')
+        except HTTPError as e:
+            if e.code == 404:
+                print('DOI not found: {}'.format(doi_url))
+            else:
+                print('Service unavailable.')
+
+        if not get_json:
+            if bibtex[0].isdigit():
+                bibtex = bibtex.split('.', 1)[-1]  # .strip('\n')
+
+        return bibtex
+
+    async def get_citation_list(self, task_id, style: str = 'nature'):
+        search_path = self.get_search_path(task_id)
+        search_history = []
+        if os.path.isfile(search_path):
+            with open(search_path, "r") as f:
+                search_history = json.load(f)
+            doi_list = [pl.get('doi', None)
+                        for pl in search_history if pl.get('doi', None)]
+
+        if not doi_list:
+            doi_list = ['10.1371/journal.pbio.3002506',
+                        '10.1101/2023.11.30.569354',
+                        '10.1371/journal.pbio.3002538']
+            # return ["No valid DOI"]
+
+        refList = []
+        for doi in doi_list:
+            refList.append(await self.build_formatted_citation(
+                doi, style=style, get_json=False, verbose=False))
+
+        return refList, doi_list
 
     async def set_update_time(self, task_id):
         chat_path = self.get_chat_path(task_id)

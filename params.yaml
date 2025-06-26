@@ -29,12 +29,14 @@ reranking:
 llm:
   model_name: 'groq/llama3-70b-8192' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
   model_list:
+    - groq/meta-llama/llama-4-scout-17b-16e-instruct
+    - groq/compound-beta
+    - groq/gemma2-9b-it
+    - groq/llama3-70b-versatile
     - groq/llama3-70b-8192
     - groq/llama3-8b-8192
     - groq/meta-llama/llama-4-maverick-17b-128e-instruct
-    - groq/meta-llama/llama-4-scout-17b-16e-instruct
     - groq/deepseek-r1-distill-llama-70b
-    - groq/gemma2-9b-it
     - groq/llama-3.1-8b-instant
     - groq/llama-3.3-70b-versatile
     - groq/mistral-saba-24b
@@ -119,6 +121,7 @@ chat:
             - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
             - Indicate whether the user's questions is acceptable in terms of ethical boundaries.\n
             - Indicate whether the user's question is in the scope of your domain of expertise as a scientific assistant.\n
+            - Indicate whether the user is explicitely asking to insert citations in the provided text.\n
             - Indicate whether the user's question is explicitely restricted to an article mentioned previously in the conversation.\n
             - If the user's question is explicitely about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
 
@@ -142,16 +145,6 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
-
-  # instruct_expand: >
-  #           You are a scientific query planner and expansion agent.\n
-  #           Given the full conversation context and the user request, you must extract a search expansion plan.\n
-  #           Your output must fill the following fields:\n
-  #           <FIELDS>\n\n
-  #           If you can't find answers for a field just fill it with 'null'.\n
-  #           Output strictly valid JSON.\n
-  #           Here is the original query:\n
-  #           <QUERY>
   instruct_genplan: |
             You are a generation planner for scientific answering.\n
             You receive:\n
@@ -191,6 +184,26 @@ chat:
             Here below are the section title and scope:\n
             - Section Title: <TITLE>\n
             - Section Scope: <CONTENT>
+  instruct_insertCitation: |
+            You are a citation‐insertion agent who inserts citations into texts.  
+            Your input consists of:
+
+            1. A text provided by the user containing scientific claims and statements.  
+            2. A list of articles, each identified by a unique `Article ID`, provided in the context.
+
+            Your task is to:
+            1. **Scan** the text and identify every factual claim, statistic, or assertion that can be supported by one of the Context Articles.  
+            2. **Insert** the appropriate inline citation(s) **immediately after** each claim, using the exact format `[articleID]`.  
+            3. **Only** use citations from the provided Context Articles—do **not** invent or reference any other works.  
+            4. **Do not** change any wording in the text except to add the citation markers.  
+            5. If a single claim is supported by multiple articles, include all relevant `[articleID1, articleID2]`.  
+            6. If a sentence contains no supportable claim, mark it with `[unsupported]`.  
+
+            ### Input  
+            <CONTENT>
+
+            **Output**  
+            Return **only** the draft text with all inserted `[articleID]` citations. Do **not** add any commentary, headers, or explanations.  
   instruct_quickreply: |
             You are a scientific assistant generating a quick factual response to a user question.\n\n
 
@@ -206,7 +219,7 @@ chat:
             Answer directly to the user.
             Here is the user's query:\n
             <CONTENT>\n
-  instruct_editor: |
+  instruct_contentEditor: |
             You are a **scientific editor** responsible for ensuring factual accuracy and scientific integrity.
 
             You are given:
@@ -221,14 +234,36 @@ chat:
               - Rephrase the sentence to reflect what is actually supported.
               - Or clearly mark it with `[unsupported]` if no article supports it.
             4. If multiple articles support the same idea, you may include multiple IDs, e.g., `[xxxx, xxxx]`.
-            5. If article IDs mentioned by the writer are incorrect, replace them with the correct ones.
+            5. If article IDs mentioned by the writer are incorrect or fabricated, replace them with the correct ones.
             6. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
 
-            Return only your edited version of the draft (no introductory sentence).
-            Do not include the title or anything else than the edited version.
-            Here's the writer's draft:
+            Do **not** include the title or anything else than the edited version.
+            Do **not** insert any commentary or headers—return only the revised text
+
+            ### Input
             **Title**: <TITLE>
             **Draft**: <CONTENT>
+
+            ### Output
+            The revised version of the draft with inline citations in square brackets, no prefatory remarks.
+
+
+  instruct_styleEditor: |
+            You are a professional scientific editor.  
+            Your input is a multi‐section draft written by independent writers, with inline citations in the form [paperId].  
+
+            Your job is to:
+            1. Rephrase the entire text into a smooth, clear, conccise and scientifically accurate narrative.  
+            2. Eliminate any redundancy or repetition between sections—only keep in each sections ideas that are not present in previous sections.  
+            3. Preserve the original section structure and all inline citations exactly as they appear (e.g. [a7c12k30...]).  
+            4. Improve the abstract: make it scientifically precise, concise, and reflective of the full text.  
+            5. Do **not** add or remove any citations, and do **not** insert any commentary or headers or title—return only the revised text.
+
+            ### Input
+            <CONTENT>
+
+            ### Output
+            The polished version of that text, inline citations in place, no prefatory remarks.
            
 
   instruct_update: >

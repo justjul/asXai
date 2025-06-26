@@ -107,7 +107,7 @@ class ChatManager:
         os.makedirs(os.path.dirname(self.chat_path), exist_ok=True)
 
         if self.mode in ['regenerate']:
-            self.delete_assistant_msg()
+            self.delete_assistant_msg(mode=self.mode)
             self.user_message = self.get_user_message()
             self.delete_user_msg()
 
@@ -115,8 +115,12 @@ class ChatManager:
         self.timestamp = ts or time.time()
         self.timestamp_cutoff = ts or 2 * time.time()
         if ts and self.mode in ['reply']:
-            self.delete_assistant_msg()
+            self.delete_assistant_msg(['reply', 'expand'])
             self.delete_user_msg()
+            logger.info(
+                f"{self.mode} mode on previous msg for {self.task_id}/{self.query_id}")
+        if ts and self.mode in ['expand']:
+            self.delete_assistant_msg(['expand'])
             logger.info(
                 f"{self.mode} mode on previous msg for {self.task_id}/{self.query_id}")
 
@@ -146,13 +150,15 @@ class ChatManager:
                     f"Failed to fetch user's message from chat history for {self.task_id}: {e}")
         return None
 
-    def delete_assistant_msg(self):
+    def delete_assistant_msg(self, mode: List[str]):
         if os.path.exists(self.chat_path):
             try:
                 with open(self.chat_path, "r") as f:
                     history = json.load(f)
-                    history = [m for m in history if m.get(
-                        "query_id") != self.query_id or m.get("role") != 'assistant']
+                    history = [m for m in history
+                               if m.get("query_id") != self.query_id
+                               or m.get("role") != 'assistant'
+                               or m.get("mode") not in mode]
                 with open(self.chat_path, "w") as f:
                     json.dump(history, f)
             except Exception as e:
@@ -472,7 +478,10 @@ async def chat_process(payload, inference_manager):
                 search_query['paperIds'].extend(
                     [p['paperId'] for p in paper_results])
                 papers.extend(paper_results)
-                full_query += ' \n'.join(search_query.get('queries', '')) + ' \n'
+
+                if not search_query.get('cite_only', False):
+                    full_query += ' \n'.join(
+                        search_query.get('queries', '')) + ' \n'
 
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
@@ -522,7 +531,10 @@ async def chat_process(payload, inference_manager):
                 {"title": "", "content": full_query, "paperIds": paperIds}]
             abstract = []
             if not chat_manager.mode in ["update"]:
-                instruct_writer = chat_config['instruct_quickreply']
+                if search_query.get('cite_only', False):
+                    instruct_writer = chat_config['instruct_insertCitation']
+                else:
+                    instruct_writer = chat_config['instruct_quickreply']
             else:
                 instruct_writer = chat_config['instruct_update']
                 if not papers:
@@ -538,7 +550,7 @@ async def chat_process(payload, inference_manager):
             )
 
         startime = time.time()
-        chat_manager.stream(" *Writing & editing Drafts*")
+        chat_manager.stream("\n<WRITING>\n")
 
         full_response = ""
         think_response = ""
@@ -548,7 +560,7 @@ async def chat_process(payload, inference_manager):
             clear_stream = True
 
         queues = [asyncio.Queue() for _ in sections]
-        tasks = []
+        task_writers = []
         for section, queue in zip(sections, queues):
             writer_streamer = await inference_manager.writer(
                 title=section['title'],
@@ -559,48 +571,16 @@ async def chat_process(payload, inference_manager):
                 model=model_name,
                 temperature=0.5,
             )
-            # tasks.append(asyncio.create_task(
-            #     response_to_queue(writer_coro, queue)))
-            tasks.append(asyncio.create_task(
+
+            task_writers.append(asyncio.create_task(
                 inference_manager.stream_to_queue(writer_streamer, queue)))
 
-            # full_response += f"\n\n## {section['title']}\n\n"
-            # chat_manager.stream(f"\n\n## {section['title']}\n\n")
-            # while True:
-            #     chunk = await queue.get()
-            #     if chunk is None:
-            #         break
-            #     full_response += chunk['content']
-            #     think_response += chunk['think']
-            #     chat_manager.stream(chunk['content'])
-
+        task_editors = []
+        full_response = ""
         for section, queue in zip(sections, queues):
-            # full_response += f"\n\n## {section['title']}\n\n"
             chat_manager.stream(f"\n\n## {section['title']}\n\n")
             section['content'] = ""
             think_response += " \n\n"
-
-        #     # draft = await queue.get()
-        #     # if isinstance(draft, Exception):
-        #     #     logger.error(
-        #     #         f"Error during retrieval of writers drafts: {draft}")
-        #     # streamer = await inference_manager.writer(
-        #     #     title=section['title'],
-        #     #     content=draft.get('content', ''),
-        #     #     documents=section['documents'],
-        #     #     instruct=chat_config['instruct_editor'],
-        #     #     stream=True,
-        #     #     model=model_name,
-        #     #     temperature=0.5,
-        #     # )
-
-        #     # streamer = await queue.get()
-        #     # response = await inference_manager.stream(
-        #     #     streamer,
-        #     #     chat_manager.stream_path,
-        #     # )
-        #     # full_response += response['content']
-        #     # think_response += response['think']
 
             while True:
                 chunk = await queue.get()
@@ -615,130 +595,55 @@ async def chat_process(payload, inference_manager):
 
                 chat_manager.stream(chunk['content'])
 
-            editor = inference_manager.writer(
-                title=section['title'],
-                content=section.get('content', ''),
-                documents=section['documents'],
-                instruct=chat_config['instruct_editor'],
+            if not search_query.get('cite_only', False) or chat_manager.mode in ["expand"]:
+                content_editor = inference_manager.writer(
+                    title=section['title'],
+                    content=section.get('content', ''),
+                    documents=section['documents'],
+                    instruct=chat_config['instruct_contentEditor'],
+                    stream=False,  # False,  # True,
+                    model=model_name,
+                    temperature=0.5,
+                )
+                task_editors.append(asyncio.create_task(
+                    inference_manager.response_to_queue(content_editor, queue)))
+            else:
+                full_response += section.get('content', '')
+
+        if task_editors:
+            chat_manager.stream("\n<EDITING>\n")
+
+            for section, queue in zip(sections, queues):
+                edited_response = await queue.get()
+                section['content'] = edited_response['content']
+
+                full_response = ""
+                for s in sections:
+                    if s['title'] != "abstract":
+                        full_response += f"\n\n## {s['title']}\n\n"
+                    full_response += s['content']
+                chat_manager.stream("\n<CLEAR>\n")
+                chat_manager.stream(full_response)
+
+            chat_manager.stream("\n<REVISING>\n")
+
+            final_version = await inference_manager.writer(
+                content=full_response,
+                instruct=chat_config['instruct_styleEditor'],
                 stream=False,  # False,  # True,
                 model=model_name,
                 temperature=0.5,
             )
-            tasks.append(asyncio.create_task(
-                inference_manager.response_to_queue(editor, queue)))
+            full_response = final_version['content']
+            chat_manager.stream("\n<CLEAR>\n")
+            chat_manager.stream(full_response)
 
-        chat_manager.stream("\n<EDITING>\n")
+            await asyncio.gather(*task_writers)
+
+        await asyncio.gather(*task_writers)
 
         if not think_response.strip("\n").strip(" "):
             think_response = ""
-
-        full_response = ""
-        for section, queue in zip(sections, queues):
-            if section['title'] != "abstract":
-                full_response += f"\n\n## {section['title']}\n\n"
-            edited_content = await queue.get()
-            full_response += edited_content['content']
-
-        chat_manager.stream("\n<END_OF_MESSAGE>\n")
-
-        await asyncio.gather(*tasks)
-
-        #
-        #
-        # for section in sections:
-        #     streamer = await inference_manager.writer(
-        #         title=section['title'],
-        #         content=section.get('content', ''),
-        #         documents=section['documents'],
-        #         instruct=instruct_writer,
-        #         stream=True,  # False,  # True,
-        #         model=model_name,
-        #         temperature=0.5,
-        #     )
-        #     # section['content'] = draft['content']
-        #     # logger.info(section['content'])
-
-        #     # draft = await inference_manager.writer(
-        #     #     title=section['title'],
-        #     #     content=section.get('content', ''),
-        #     #     documents=section['documents'],
-        #     #     instruct=instruct_writer,
-        #     #     stream=False,  # True,
-        #     #     model=model_name,
-        #     #     temperature=0.5,
-        #     # )
-        #     # section['content'] = draft['content']
-        #     # logger.info(section['content'])
-        #     # # llm_streamers.append(streamer)
-
-        #     # streamer = await inference_manager.writer(
-        #     #     title=section['title'],
-        #     #     content=section.get('content', ''),
-        #     #     documents=section['documents'],
-        #     #     instruct=chat_config['instruct_editor'],
-        #     #     stream=True,
-        #     #     model=model_name,
-        #     #     temperature=0.5,
-        #     # )
-
-        #     full_response += f"\n\n## {section['title']}\n\n"
-        #     chat_manager.stream(f"\n\n## {section['title']}\n\n")
-
-        #     response = await inference_manager.stream(
-        #         streamer,
-        #         chat_manager.stream_path,
-        #     )
-        #     full_response += response['content']
-        #     think_response += response['think']
-
-        # chat_manager.stream("\n<END_OF_MESSAGE>\n")
-        #
-        #
-
-        # queues = [asyncio.Queue() for _ in sections]
-
-        # tasks = [
-        #     asyncio.create_task(stream_to_queue(streamer, queue))
-        #     for streamer, queue in zip(llm_streamers, queues)
-        # ]
-
-        # full_response = ""
-        # think_response = ""
-        # if abstract:
-        #     full_response += f"\n\n{abstract}\n\n"
-        #     chat_manager.stream(f"\n\n{abstract}\n\n")
-        # # for section, queue in zip(sections, queues):
-        # for section, streamer in zip(sections, llm_streamers):
-        #     # buffer = ""
-        #     full_response += f"\n\n## {section['title']}\n\n"
-        #     chat_manager.stream(f"\n\n## {section['title']}\n\n")
-
-        #     response = await inference_manager.stream(
-        #         streamer,
-        #         chat_manager.stream_path,
-        #     )
-        #     full_response += response['content']
-        #     think_response += response['think']
-
-        #     # async for chunk in streamer:
-        #     #     # while True:
-        #     #     #     chunk = await queue.get()
-        #     #     # if chunk is None:  # Stream finished
-        #     #     #     break
-        #     #     token = chunk["message"]["content"]
-        #     #     buffer += token
-
-        #     #     if len(buffer) > 100:
-        #     #         chat_manager.stream(buffer)
-        #     #         buffer = ""
-        #     #     full_response += token
-
-        #     # # Write any remaining buffer
-        #     # if len(buffer) > 0:
-        #     #     chat_manager.stream(buffer)
-
-        # # Final end signal
-        # chat_manager.stream("\n<END_OF_MESSAGE>\n")
 
         if full_response:
             chat_manager.save_chat_msg(
@@ -747,6 +652,7 @@ async def chat_process(payload, inference_manager):
                 papers=None, access="all", notebook_title=notebook_title,
             )
 
+        chat_manager.stream("\n<END_OF_MESSAGE>\n")
         logger.info(f"Streaming complete for task_id={task_id}")
 
         await Notebook_manager.search_cleanup(task_id)

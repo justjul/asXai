@@ -21,12 +21,47 @@ export async function authFetch(user, url, options = {}) {
   return fetch(url, { ...options, headers });
 }
 
+function buildReferencesHtml(refList, refDois) {
+  const items = refList.map((ref, i) => `
+      <li>
+        ${ref}
+        <br/>
+        <a href="${refDois[i]}" target="_blank" rel="noopener">
+          ${refDois[i]}
+        </a>
+      </li>
+  `).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>References</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    h1 { font-size: 1.5rem; }
+    ul { list-style-type: decimal; padding-left: 1.5rem; }
+    li { margin-bottom: 1rem; }
+    a { text-decoration: none; color: #1a0dab; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>References</h1>
+  <ul>
+    ${items}
+  </ul>
+</body>
+</html>`;
+}
+
 export default function ChatApp() {
   const { notebookId } = useParams();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [modelList, setModelList] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [isChangingModel, setIsChangingModel] = useState(false);
   const [question, setQuestion] = useState('');
   const [topK, setTopK] = useState(5);
   const [messages, setMessages] = useState([]);
@@ -491,7 +526,7 @@ export default function ChatApp() {
 
     const startStreaming = async () => {
       setIsStreaming(true);
-      setStreamingStage('generating');
+      setStreamingStage('processing query');
       setStreamingNotebookIds(prev => {
         const next = new Set(prev);
         next.add(notebookStreamId);
@@ -516,9 +551,19 @@ export default function ChatApp() {
         const parser = createParser({
           onEvent: (event) => {
             if (streamingNotebookIdRef.current !== notebookId) return;
-            
+
+            if (event.data === '<WRITING>') {
+              setStreamingStage('generating');
+              return; 
+            }
+
             if (event.data === '<EDITING>') {
               setStreamingStage('editing');
+              return; 
+            }
+
+            if (event.data === '<REVISING>') {
+              setStreamingStage('revising');
               return; 
             }
 
@@ -616,6 +661,34 @@ export default function ChatApp() {
       return [];
     }
   };
+
+  async function downloadReferences() {
+    const res = await authFetch(
+      user,
+      `${API_URL}/notebook/${notebookId}/references.txt`,
+      {method: 'GET'}
+    );
+    if (!res.ok) {
+      console.error('Failed to fetch references:', res.status);
+      return;
+    }
+
+    const {references: refList, dois: refDois} = await res.json();
+
+    const html = buildReferencesHtml(refList, refDois);
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const filename = notebookTitle.replace(/\s+/g, '_') + '.html';
+
+    const a = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   const loadModelList = async () => {
     try {
@@ -977,7 +1050,7 @@ export default function ChatApp() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      marginRight: '5%',
+                      marginRight: '4%',
                       border: 'none',
                       borderRadius: "4px",
                       background: 'var(--main-bg)',
@@ -985,7 +1058,18 @@ export default function ChatApp() {
                     }}
                     title="Update all Notebooks"
                   >
-                    ↻
+                    <img
+                      src= "/book_update_icon.svg"
+                      alt= "Update all Notebooks"
+                      style={{
+                        height: '2em', // or adjust as needed for your top bar
+                        width: '2em',
+                        display: 'block',
+                        marginRight: 0.0,
+                        pointerEvents: 'none', // so clicks reach the button
+                        background: 'transparent',
+                      }}
+                    />
                   </button>
                 </div>
                 {notebooks.map((nb) => (
@@ -1251,45 +1335,84 @@ export default function ChatApp() {
             </button>
             )}
             {/* Notebook Title */}
-            <span
-              style={{
-                fontWeight: "600",
-                fontSize: "1.2rem",
-                marginLeft: "0.75rem",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: "18vw",  // prevents long titles from breaking layout
-                color: 'var(--main-font-color)',
-                fontFamily: 'var(--main-font)',
-              }}
-            >
-              {notebookTitle}
-            </span>
-            <select
-              value={selectedModel}
-              onFocus={loadModelList}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              style={{
-                flex: 1,
-                maxWidth: '30%', // limit width so it fits between buttons
-                margin: '0 0.5rem',
-                borderRadius: '4px',
-                border: '1px solid var(--main-border)',
+            <div 
+              className="main-chat-area" 
+              style={{ flex: 1, 
+                display: 'flex', 
+                flexDirection: 'column', 
                 background: 'var(--main-bg)',
-                color: 'var(--main-font-color)',
-                fontFamily: 'inherit',
-                fontSize: '0.9rem',
-              }}
-              title="Select model"
+                padding: 0}}
             >
-              <option value="">Select model</option>
-              {modelList.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
+              <span
+                style={{
+                  fontWeight: "600",
+                  fontSize: "1.2rem",
+                  marginLeft: "0.75rem",
+                  marginBottom: "0.0",
+                  cursor: 'pointer',
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: "18vw",  // prevents long titles from breaking layout
+                  color: 'var(--main-font-color)',
+                  fontFamily: 'var(--main-font)',
+                }}
+                onClick={() => !isChangingModel && setIsChangingModel(true)}
+              >
+                {notebookTitle}
+              </span>
+              <span
+                style={{
+                  fontWeight: "600",
+                  fontSize: "0.8rem",
+                  fontStyle: 'italic',
+                  cursor: 'pointer',
+                  marginLeft: "0.75rem",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  background: "transparent",
+                  maxWidth: "18vw",  // prevents long titles from breaking layout
+                  color: 'var(--main-font-color)',
+                  fontFamily: 'var(--main-font)',
+                }}
+                onClick={() => !isChangingModel && setIsChangingModel(true)}
+              >
+                {isChangingModel ? (
+                  <select
+                    autoFocus
+                    value={selectedModel}
+                    onFocus={loadModelList}
+                    onChange={(e) => {
+                      setSelectedModel(e.target.value);
+                      setIsChangingModel(false);
+                    }}
+                    onBlur={() => setIsChangingModel(false)}
+                    style={{
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "18vw",  // expand to same width as the container
+                      border: "none",
+                      background: "var(--main-bg)",
+                      color: "var(--main-font-color)",
+                      fontFamily: "inherit",
+                      fontSize: "0.9rem",
+                    }}
+                    title="Select model"
+                  >
+                    <option value="">Select model</option>
+                    {modelList.map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  selectedModel
+                )}
+              </span>
+            </div>
           </div>
           {/* Center: Logo */}
           <div style={{
@@ -1302,7 +1425,7 @@ export default function ChatApp() {
               className= "logo-img"
               alt="asXai logo"
               style={{
-                height: "3.5rem", // adjust size as needed
+                height: "4rem", // adjust size as needed
                 objectFit: "contain",
                 margin: 0
               }}
@@ -1534,7 +1657,6 @@ export default function ChatApp() {
                     style={{
                       cursor: 'pointer',
                       fontSize: '0.8em',
-                      color: 'red',
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1552,7 +1674,6 @@ export default function ChatApp() {
                       style={{
                         cursor: 'pointer',
                         fontSize: '0.8em',
-                        color: 'orange',
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1562,6 +1683,23 @@ export default function ChatApp() {
                       title="Edit message"
                     >
                       ✏️
+                    </span>
+                  }
+
+                  {msg.role === 'user' &&
+                    msg.mode !== 'update' &&
+                    <span
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '0.8em',
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSubmit({editedQuestion: msg.content, query_id: msg.query_id});
+                      }}
+                      title="Regenerate"
+                    >
+                      ↻
                     </span>
                   }
 
@@ -1595,7 +1733,7 @@ export default function ChatApp() {
                       🔎
                     </span>
                   }
-                  {msg.role === 'assistant' && msg.think.length > 20 && 
+                  {msg.role === 'assistant' && msg?.think && 
                     <span
                       style={{
                         cursor: 'pointer',
@@ -1760,8 +1898,15 @@ export default function ChatApp() {
         </div>
         <div style={{
           background: 'var(--main-bg)',
-          margin: "1%",
+          marginLeft: "5%",
+          marginRight: "5%",
+          marginTop: "0.5%",
+          marginBottom: "2%",
           display: "flex",
+          justifyContent: 'space-between',
+          flexDirection: 'row',
+          border: "1px solid var(--main-border)",
+          borderRadius: '4px',
           // alignItems: "flex-center"
         }}>
           {streamingNotebookIds.has(notebookId) && (
@@ -1793,35 +1938,35 @@ export default function ChatApp() {
               minHeight: "2.5rem",
               maxHeight: "6rem",
               padding: "0.5rem",
-              border: "1px solid var(--main-border)",
-              borderRadius: '25px',
+              border: "none",
               fontSize: "1rem", 
               lineHeight: 1.3,
               boxSizing: "border-box",
             }}
             onKeyDown={e => {
-              // Optional: send on Ctrl+Enter
               if (e.shiftKey && e.key === "Enter") handleSubmit();
             }}
           />
           <button
             onClick={() => (!streamingNotebookIds.has(notebookId) ? handleSubmit() : abortSubmit(notebookId))}
             style={{
-              width:'5%',
-              padding: '0.75rem 0.5rem',
-              backgroundColor: '#2563eb',
-              color: 'white',
+              flex: 1,
+              display: 'flex',
+              maxWidth:'10%',
+              padding: '0.5rem 0.5rem',
+              backgroundColor: 'var(--main-fg)',
+              color: 'var(--main-font-color)',
               border: 'none',
               borderRadius: '4px',
-              fontSize: '0.75rem',
+              fontSize: '1.5rem',
               justifyContent: 'center',
               height: 'fit-content',
               alignSelf: 'flex-end',
               fontFamily: 'var(--main-font)',
-              margin: '1%'
+              margin: '1%',
             }}
           >
-            {!streamingNotebookIds.has(notebookId) ? 'Send' : '⏹'}
+            {!streamingNotebookIds.has(notebookId) ? '▶' : '◼'}
           </button>
         </div>
       </div>
@@ -2053,26 +2198,47 @@ export default function ChatApp() {
               display: 'flex', 
               alignItems: 'right', 
               justifyContent: 'space-between',}}>
-            <button
-              onClick={() => setCheckingTrash(l => !l)}
-              title={checkingTrash ? "Back to Articles" : "Trashed Articles"}
-              style={{
-                border: checkingTrash ? '1px solid rgb(236, 64, 150)' : 'none',
-                background: checkingTrash ? 'rgb(240, 208, 223)' : 'transparent',
-                cursor: 'pointer',
-                padding: 0,
-                margin: '2%',
-                fontSize: '1.5rem',
-                lineHeight: 0, 
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '2em', // or adjust as needed for your top bar
-                width: '2em',
-                display: 'block',
-              }}
-            >
-              ♻️
-            </button>
+            <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
+              <button
+                onClick={() => setCheckingTrash(l => !l)}
+                title={checkingTrash ? "Back to Articles" : "Trashed Articles"}
+                style={{
+                  border: checkingTrash ? '1px solid rgb(236, 64, 150)' : 'none',
+                  background: checkingTrash ? 'rgb(240, 208, 223)' : 'transparent',
+                  cursor: 'pointer',
+                  padding: 0,
+                  margin: '2%',
+                  fontSize: '1.5rem',
+                  lineHeight: 0, 
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '2em', // or adjust as needed for your top bar
+                  width: '2em',
+                  display: 'block',
+                }}
+              >
+                ♻️
+              </button>
+              <button 
+                onClick={downloadReferences}
+                style={{
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  padding: 0,
+                  margin: '2%',
+                  fontSize: '1.5rem',
+                  lineHeight: 0, 
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '2em', // or adjust as needed for your top bar
+                  width: '2em',
+                  display: 'block',
+                }}
+                title="Download reference list"
+              >
+                📥
+              </button>
+            </div>
             <div style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
               <label style={{ display: 'flex', alignItems: 'right', gap: '0.1rem' }}>
                 <label
