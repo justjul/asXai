@@ -483,11 +483,15 @@ def extracted_to_DB(textdata, metadata):
     textdata.to_parquet(fp_text.with_suffix(".inprogress"), engine="pyarrow",
                         compression="snappy", index=True)
     fp_text.with_suffix(".inprogress").rename(fp_text)
+    fp_text.flush()
+    os.fsync(fp_text.fileno())
 
     fp_meta = output_dir_DB / "metadata.extracted"
     metadata.to_parquet(fp_meta.with_suffix(".inprogress"), engine="pyarrow",
                         compression="snappy", index=True)
     fp_meta.with_suffix(".inprogress").rename(fp_meta)
+    fp_meta.flush()
+    os.fsync(fp_meta.fileno())
 
 
 def collect_extracted_batch(directory: Path):
@@ -908,8 +912,27 @@ def batch_full_Clean(extracted_dir: str,
 
                 ids_to_save.extend(pdfdata["paperId"])
 
-                paperdata["text"] = (pdfdata.set_index("doi").combine_first(
-                    paperdata["text"].set_index("doi")).reset_index(drop=False))
+                # Ensure unique DOI index before combining
+                pdfdata_clean = pdfdata.drop_duplicates(
+                    subset="doi", keep="first")
+                text_clean = paperdata["text"].drop_duplicates(
+                    subset="doi", keep="first")
+
+                # Merge using DOI
+                paperdata_text = (
+                    pdfdata_clean.set_index("doi")
+                    .combine_first(text_clean.set_index("doi"))
+                    .reset_index(drop=False)
+                )
+
+                # Re-align to match original paperId order in metadata
+                # by joining on 'paperId'
+                paperdata["text"] = paperdata["metadata"][["paperId"]].merge(
+                    paperdata_text, on="paperId", how="left"
+                )
+
+                # paperdata["text"] = (pdfdata.set_index("doi").combine_first(
+                #     paperdata["text"].set_index("doi")).reset_index(drop=False))
 
                 paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
             except:
