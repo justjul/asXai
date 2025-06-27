@@ -153,11 +153,14 @@ def get_normalized_textdata(textdata):
 
     mask = papertext["main_text"].str.len() < 500
     papertext.loc[mask, "main_text"] = papertext.loc[mask].apply(
-        lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
+        lambda x: ' '.join([x["title"] or '', x["abstract"] or '']), axis=1)
 
     mask = papertext["ref_text"].str.len() < 500
     papertext.loc[mask, "ref_text"] = papertext.loc[mask].apply(
-        lambda x: ' '.join([x["title"], x["abstract"]]), axis=1)
+        lambda x: ' '.join([x["title"] or '', x["abstract"] or '']), axis=1)
+
+    # Remove entries still too short
+    papertext = papertext[papertext['main_text'].str.len() >= 500].copy()
 
     papertext = papertext[['paperId', 'main_text', 'ref_text', 'pdf_extracted', 'title',
                            'abstract',]]
@@ -171,7 +174,13 @@ def get_normalized_metadata(metadata):
 def get_payload_and_text(paperdata):
     textdata = get_normalized_textdata(paperdata["text"])
     metadata = get_normalized_metadata(paperdata["metadata"])
-    data = pd.merge(metadata, textdata, how='left', on='paperId')
+    data = pd.merge(metadata, textdata, how='inner', on='paperId')
+
+    before = len(paperdata["metadata"])
+    after = len(data)
+    if before != after:
+        logger.info(
+            f"Discarded {before - after} papers with insufficient text")
 
     return data
 

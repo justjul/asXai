@@ -483,15 +483,11 @@ def extracted_to_DB(textdata, metadata):
     textdata.to_parquet(fp_text.with_suffix(".inprogress"), engine="pyarrow",
                         compression="snappy", index=True)
     fp_text.with_suffix(".inprogress").rename(fp_text)
-    fp_text.flush()
-    os.fsync(fp_text.fileno())
 
     fp_meta = output_dir_DB / "metadata.extracted"
     metadata.to_parquet(fp_meta.with_suffix(".inprogress"), engine="pyarrow",
                         compression="snappy", index=True)
     fp_meta.with_suffix(".inprogress").rename(fp_meta)
-    fp_meta.flush()
-    os.fsync(fp_meta.fileno())
 
 
 def collect_extracted_batch(directory: Path):
