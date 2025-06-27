@@ -1,3 +1,43 @@
+download:
+  min_citations_per_year: 1
+  fields_of_study:
+    - Computer Science
+    - Biology
+    - Physics
+    - Geology
+    - Psychology
+    - Mathematics
+    - Environmental Science
+    - Agricultural and Food Sciences
+  fields_to_return:
+    - title
+    - citationCount
+    - abstract
+    - venue
+    - authors
+    - publicationDate
+    - fieldsOfStudy
+    - influentialCitationCount
+    - openAccessPdf
+    - references
+    - externalIds
+
+pdf:
+  n_jobs_download: 20
+  n_jobs_extract: 40
+  timeout_per_article: 15
+  run_headless: True
+  max_pages_start: 20
+  max_pages_end: null
+  extract_ref: False
+  timeout_loadpage: 15
+  timeout_startdw: 15
+  save_pdfs_to: null
+  keep_pdfs: false
+
+load:
+  n_jobs: 20
+  
 embedding:
   model_name: intfloat/multilingual-e5-large-instruct
   chunk_size: 170 #85 #null
@@ -25,9 +65,17 @@ reranking:
   training_epochs: 10
   test_size: 0.2
   learning_rate: 0.0001
+
+search:
+  hash_len: 20
+  topk_rerank: 10
+  ntopk_qdrant: 5
+  topk_per_article: 1
+  timeout: 15.0
+  use_query_cache: false
   
 llm:
-  model_name: 'groq/llama3-70b-8192' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
+  model_name: 'groq/meta-llama/llama-4-scout-17b-16e-instruct' #'mistral-small:24b' #'deepseek-r1:32b' #'gemma2:27b' #'deepseek-r1:14b' #
   model_list:
     - groq/meta-llama/llama-4-scout-17b-16e-instruct
     - groq/compound-beta
@@ -69,14 +117,6 @@ llm:
             {\"cleaned_query\" \"author_names\", \"start_date\", \"end_date\"}\n\n
             If you can't find answers for any of these fields just fill it with 'null'.\n
             Here is the original query:\n
-
-search:
-  hash_len: 20
-  topk_rerank: 10
-  ntopk_qdrant: 5
-  topk_per_article: 1
-  timeout: 15.0
-  use_query_cache: false
 
 chat:
   hash_len: 20
@@ -311,36 +351,3 @@ chat:
             * Structure your response in multiple paragraph describing one element of the response.
               Cite your sources by including where appropriate (<ARTICLE_ID>) where ARTICLE_ID are the hashed ids provided in the context\n
               for each article.\n
-
-download:
-  min_citations_per_year: 1
-  fields_of_study:
-    - Computer Science
-    - Biology
-  fields_to_return:
-    - title
-    - citationCount
-    - abstract
-    - venue
-    - authors
-    - publicationDate
-    - fieldsOfStudy
-    - influentialCitationCount
-    - openAccessPdf
-    - references
-
-pdf:
-  n_jobs_download: 20
-  n_jobs_extract: 40
-  timeout_per_article: 15
-  run_headless: True
-  max_pages_start: 20
-  max_pages_end: null
-  extract_ref: False
-  timeout_loadpage: 15
-  timeout_startdw: 15
-  save_pdfs_to: null
-  keep_pdfs: false
-
-load:
-  n_jobs: 20

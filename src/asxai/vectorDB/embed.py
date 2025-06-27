@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import pandas as pd
 import re
+import os
 
 from asxai.utils import load_params
 from asxai.utils import get_tqdm
@@ -181,6 +182,9 @@ def save_embeddings(paper_id: str,
     file_path = cache_dir / f"{paper_id}.json"
     with open(file_path.with_suffix(".inprogress"), "w") as f:
         json.dump(data, f)
+        f.flush()
+        os.fsync(f.fileno())
+
     file_path.with_suffix(".inprogress").rename(file_path)
 
 

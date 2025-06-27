@@ -167,8 +167,8 @@ def load_data(
 def update_text(newtxtdata, subset):
     txtdata = load_data(subset, data_types=['text'])
 
-    txtdata = (newtxtdata.set_index("paperId").combine_first(
-        txtdata["text"].set_index("paperId")).reset_index(drop=False))
+    txtdata = (newtxtdata.set_index("doi").combine_first(
+        txtdata["text"].set_index("doi")).reset_index(drop=False))
 
     filename = f"text_{str(subset)}.parquet"
     filepath = config.TEXTDATA_PATH / str(subset) / filename

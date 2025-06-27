@@ -105,20 +105,23 @@ class PDFextractor:
                             with open(dic_path.with_suffix(".inprogress"), "wb") as f:
                                 pickle.dump(paper_data, f,
                                             protocol=pickle.HIGHEST_PROTOCOL)
+                                f.flush()
+                                os.fsync(f.fileno())
+
                             dic_path.with_suffix(
                                 ".inprogress").rename(dic_path)
 
                         dir_list.remove(dirname)
-                        if not self.keepPDF:
-                            shutil.rmtree(dir_path)
+                        if not self.keepPDF and os.path.isdir(dir_path):
+                            shutil.rmtree(dir_path, ignore_errors=True)
                     elif time.time() - dirname["time"] > self.timeout:
                         crfilepath = glob.glob(
                             os.path.join(dir_path, "*.crdownload"))
                         if not crfilepath or \
                                 time.time() - os.path.getmtime(crfilepath[0]) > self.timeout:
                             dir_list.remove(dirname)
-                            if not self.keepPDF:
-                                shutil.rmtree(dir_path)
+                            if not self.keepPDF and os.path.isdir(dir_path):
+                                shutil.rmtree(dir_path, ignore_errors=True)
 
         return [pdf_data["paperId"] for pdf_data in papers]
 
@@ -428,7 +431,11 @@ def collect_extracted_PDFs(directory: str, paperIds: List[str]):
             try:
                 with open(paper_path, "rb") as f:
                     final_results.append(pickle.load(f))
-                    os.remove(paper_path)
+                if os.path.isfile(paper_path):
+                    try:
+                        os.remove(paper_path)
+                    except Exception:
+                        logger.exception(f"Unable to remove {paper_path}")
             except Exception as e:
                 print(e)
 
@@ -858,7 +865,8 @@ def clean_full_text(pdf, extract_ref):
         pdf["main_text"], pdf["ref_text"] = get_clean_block_text(
             pdf["full_text"], extract_ref)
     except Exception as e:
-        logger.warning(f"There's been an issue cleaning text: {pdf[:100]}")
+        logger.warning(
+            f"There's been an issue cleaning text: {pdf[:100]}: {e}")
     return pdf
 
 
@@ -880,24 +888,36 @@ def batch_full_Clean(extracted_dir: str,
                     continue
 
             extracted_pdfs = collect_extracted_PDFs(extracted_dir, new_ids)
+        except Exception:
+            logger.exception("Cleanup failed during pdf collection")
+            raise
 
+        try:
             clean_pool = multiprocessing.Pool(processes=n_jobs)
             clean_async = [clean_pool.apply_async(clean_full_text, (pdf, extract_ref))
                            for pdf in extracted_pdfs]
             final_results = [task.get() for task in clean_async]
+        except:
+            logger.exception("Cleanup failed during task completion")
+            raise
 
-            if final_results:
+        if final_results:
+            try:
                 pdfdata = pd.DataFrame(
                     [pdf for pdf in final_results])
 
                 ids_to_save.extend(pdfdata["paperId"])
 
-                paperdata["text"] = (pdfdata.set_index("paperId").combine_first(
-                    paperdata["text"].set_index("paperId")).reset_index(drop=False))
+                paperdata["text"] = (pdfdata.set_index("doi").combine_first(
+                    paperdata["text"].set_index("doi")).reset_index(drop=False))
 
                 paperdata["text"]["authorName"] = paperdata["metadata"]["authorName"]
+            except:
+                logger.exception("Cleanup failed during assembling results")
+                raise
 
-            if len(ids_to_save) > 64:
+        if len(ids_to_save) > 64:
+            try:
                 extracted_to_text(paperdata["text"], year)
 
                 if push_to_vectorDB:
@@ -906,11 +926,11 @@ def batch_full_Clean(extracted_dir: str,
                     text_to_DB = paperdata['text'].loc[DBmask]
                     metadata_to_DB = paperdata['metadata'].loc[DBmask]
                     extracted_to_DB(text_to_DB, metadata_to_DB)
+            except:
+                logger.exception("Cleanup failed during saving")
+                raise
 
-                ids_to_save = []
-        except Exception as e:
-            logger.warning(f"Clean up of extracted PDFs failed: {e}")
-            pass
+            ids_to_save = []
 
     if len(ids_to_save) > 0:
         extracted_to_text(paperdata["text"], year)
@@ -924,7 +944,8 @@ def batch_full_Clean(extracted_dir: str,
 
         ids_to_save = []
 
-    shutil.rmtree(extracted_dir)
+    if os.path.isdir(extracted_dir):
+        shutil.rmtree(extracted_dir, ignore_errors=True)
 
 
 def extract_PDFs(
@@ -965,10 +986,9 @@ def extract_PDFs(
     os.chmod(extracted_dir, 0o777)
 
     logger.info(f"Extracting pdfs for year {year}")
-    paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
-                         paperdata["metadata"][[
-                             "paperId", "authorName"]],
-                         on="paperId",
+    paperInfo = pd.merge(paperdata["text"][["doi", "paperId", "openAccessPdf"]],
+                         paperdata["metadata"][["doi", "authorName"]],
+                         on="doi",
                          how="inner")
 
     extract_process = multiprocessing.Process(
@@ -997,8 +1017,10 @@ def extract_PDFs(
 
     if not keep_pdfs:
         try:
-            shutil.rmtree(downloads_dir)
-        except:
-            logger.warning(f"Could not delete downloads folder for {year}")
+            if os.path.isdir(downloads_dir):
+                shutil.rmtree(downloads_dir, ignore_errors=True)
+        except Exception as e:
+            logger.warning(
+                f"Could not delete downloads folder for {year}: {e}")
 
     extract_done.set()

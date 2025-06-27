@@ -110,14 +110,17 @@ def run_embedding(
                     fp_metadata = paper_dir / "metadata.extracted"
                     paperdata['metadata'].append(
                         pd.read_parquet(fp_metadata, engine="pyarrow"))
-                    os.remove(fp_metadata)
+                    if os.path.isfile(fp_metadata):
+                        os.remove(fp_metadata)
 
                     fp_text = paper_dir / "text.extracted"
                     paperdata['text'].append(
                         pd.read_parquet(fp_text, engine="pyarrow"))
-                    os.remove(fp_text)
+                    if os.path.isfile(fp_text):
+                        os.remove(fp_text)
 
-                    os.rmdir(paper_dir)
+                    if os.path.isdir(paper_dir):
+                        os.rmdir(paper_dir)
 
                 paperdata['metadata'] = pd.concat(
                     paperdata['metadata'], axis=0).reset_index(drop=True)

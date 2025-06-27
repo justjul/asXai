@@ -182,7 +182,8 @@ class QdrantManager:
                     await asyncio.sleep(backoff_seconds)
 
         if self.clean_after_push:
-            os.remove(file_path)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
 
     async def check_collection(self):
         if not await self.client.collection_exists(self.collection_name_ids):

@@ -14,7 +14,7 @@ If you are developing a production application, we recommend using TypeScript wi
 
 ## Here's now my memo on how I made it work:
 0- intsall Node.js using instruction in https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl#install-nvm-nodejs-and-npm
-1- cd src
+1- cd front
 2- npm create vite@latest frontend -- --template react
 3- npm install
 4- npm install -D tailwindcss postcss autoprefixer
