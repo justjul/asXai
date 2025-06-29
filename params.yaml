@@ -122,7 +122,8 @@ chat:
   hash_len: 20
   allowed_origins:
     - http://localhost:5173
-    - https://goose-beloved-kit.ngrok-free.app #frontend tunnel
+    - https://goose-beloved-kit.ngrok-free.app
+    - https://api.asxai.org
 
   min_history_length: 1000
   summary_length: 100
