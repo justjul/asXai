@@ -488,7 +488,7 @@ async def chat_process(payload, inference_manager):
             if not chat_manager.mode in ["update"]:
                 search_query = search_queries[0]
             else:
-                search_query = None
+                search_query = {}
 
             for paper in papers:
                 chat_manager.save_chat_msg(
@@ -595,7 +595,9 @@ async def chat_process(payload, inference_manager):
 
                 chat_manager.stream(chunk['content'])
 
-            if not search_query.get('cite_only', False) or chat_manager.mode in ["expand"]:
+            if (not chat_manager.mode in ["update"]
+                    and (not search_query.get('cite_only', False)
+                         or chat_manager.mode in ["expand"])):
                 content_editor = inference_manager.writer(
                     title=section['title'],
                     content=section.get('content', ''),
@@ -627,18 +629,19 @@ async def chat_process(payload, inference_manager):
 
             chat_manager.stream("\n<REVISING>\n")
 
-            final_version = await inference_manager.writer(
-                content=full_response,
-                instruct=chat_config['instruct_styleEditor'],
-                stream=False,  # False,  # True,
-                model=model_name,
-                temperature=0.5,
-            )
-            full_response = final_version['content']
-            chat_manager.stream("\n<CLEAR>\n")
-            chat_manager.stream(full_response)
+            if not chat_manager.mode in ["update"]:
+                final_version = await inference_manager.writer(
+                    content=full_response,
+                    instruct=chat_config['instruct_styleEditor'],
+                    stream=False,  # False,  # True,
+                    model=model_name,
+                    temperature=0.5,
+                )
+                full_response = final_version['content']
+                chat_manager.stream("\n<CLEAR>\n")
+                chat_manager.stream(full_response)
 
-            await asyncio.gather(*task_writers)
+            await asyncio.gather(*task_editors)
 
         await asyncio.gather(*task_writers)
 

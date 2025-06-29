@@ -8,7 +8,8 @@ export default defineConfig({
     // 3) Allow HMR/WebSocket stanzas from both localhost and ngrok domain:
     allowedHosts: [
       'localhost',
-      'goose-beloved-kit.ngrok-free.app'
+      'www.asxai.org',
+      'api.asxai.org'
     ],
   },
 });

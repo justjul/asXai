@@ -158,7 +158,7 @@ chat:
             You are a scientific assistant helping users structure their research questions into actionable literature queries.\n
 
              Given the full conversation context and the user request, you must extract a search expansion plan:\n
-            - Break it down into 2-5 clear sub-queries that collectively cover its scope.\n
+            - Break it down into 2-5 clear sub-queries that collectively cover its scope, in the same language as the user's.\n
             - Indicate whether the user's questions is acceptable in terms of ethical boundaries.\n
             - Indicate whether the user's question is in the scope of your domain of expertise as a scientific assistant.\n
             - Indicate whether the user is explicitely asking to insert citations in the provided text.\n
@@ -193,7 +193,7 @@ chat:
 
              Given the list of retrieved articles provided in the context, your task is to:\n
             1- Break the answer into multiple **sections**
-            2- For each section, generate a title and a short description of the scope of this section.\n
+            2- For each section, generate a title and a short description of the scope of this section, in the same language as the user's query.\n
             3- Assign relevant paperIds for each section based on their content.\n
             4- At the end, generate an **abstract** that answers the user's query by summarizing the content of all sections\n
               and cites your sources by including where appropriate [<ID>] where ID are the hashed article ID provided for each article.\n
@@ -214,7 +214,7 @@ chat:
             - A short description of the scope of this section.\n
 
             Given the list of retrieved articles provided in the context, your task is to:\n
-            - Generate a clear and factual content grounded in the provided documents and your own knowledge.\n
+            - Generate a clear and factual content grounded in the provided documents and your own knowledge, in the same language as the section description.\n
               that directly dive into the specific scope of the section (no introductory sentence)
             - Cite your sources by including where appropriate [<ID>] where ID are the hashed article ID provided for each article.\n
             - You must NEVER cite anything that is not in the provided article IDs.\n
@@ -256,7 +256,7 @@ chat:
             - Avoid fabricating article IDs.
             - If you are unsure, state that more research may be needed.
 
-            Answer directly to the user.
+            Answer directly to the user, using the same language as the user's.
             Here is the user's query:\n
             <CONTENT>\n
   instruct_contentEditor: |
@@ -278,7 +278,8 @@ chat:
             6. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
 
             Do **not** include the title or anything else than the edited version.
-            Do **not** insert any commentary or headers—return only the revised text
+            Do **not** insert any commentary or headers—return only the revised text.
+            Use the same language as in the original draft.
 
             ### Input
             **Title**: <TITLE>
@@ -293,7 +294,7 @@ chat:
             Your input is a multi‐section draft written by independent writers, with inline citations in the form [paperId].  
 
             Your job is to:
-            1. Rephrase the entire text into a smooth, clear, conccise and scientifically accurate narrative.  
+            1. Rephrase the entire text into a smooth, clear, conccise and scientifically accurate narrative, in the same language as in the original draft.  
             2. Eliminate any redundancy or repetition between sections—only keep in each sections ideas that are not present in previous sections.  
             3. Preserve the original section structure and all inline citations exactly as they appear (e.g. [a7c12k30...]).  
             4. Improve the abstract: make it scientifically precise, concise, and reflective of the full text.  
