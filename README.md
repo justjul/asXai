@@ -4,7 +4,7 @@
 
 **asXai** is an open-source, containerized RAG pipeline (Retrieval-Augmented Generation) designed for scientific questions. It enables transparent, citation-aware chat interfaces grounded in real literature from arXiv, Semantic Scholar, and other sources.
 
-👉 Try the live [demo](https://goose-beloved-kit.ngrok-free.app) (if deployed)
+👉 Try the live [demo](https://www.asxai.org) (if deployed)
 
 ---
 
