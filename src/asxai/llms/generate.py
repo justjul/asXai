@@ -14,7 +14,7 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP, ExpandQueryMCP, KeywordsMCP, NotebookTitleMCP, ChatSummarizerMCP
+from .mcp_library import QueryParseMCP, ExpandQueryMCP, KeywordsMCP, NotebookTitleMCP, ChatSummarizerMCP, RelevantPaperMCP
 from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP, parse_model_response
 
 from tqdm import tqdm
@@ -358,6 +358,9 @@ class InferenceManager:
         else:
             payload, parsed = {}, {}
 
+        if result['search_paperIds']:
+            parsed = {}
+
         results = {**result, **payload, **parsed}
 
         logger.info(f"Expand + Keywords + Parsed results: {results}")
@@ -405,6 +408,26 @@ class InferenceManager:
         result = QueryParseMCP.parse(response)
 
         return result
+
+    async def filterArticles(self, query: str = None,
+                             documents: str = '',
+                             instruct: str = chat_config['instruct_paperfilter'],
+                             **kwargs):
+
+        instruct = RelevantPaperMCP.generate_prompt(instruct)
+        prompt = instruct.replace("<QUERY>", query)
+
+        messages = []
+        messages.extend([{'role': 'user', 'content': doc}
+                        for doc in documents])
+        messages.extend([{'role': 'user', 'content': prompt}])
+
+        temperature = kwargs.pop('temperature', 0.0)
+        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
+        logger.info(f"Article filter response: {response}")
+        results = RelevantPaperMCP.parse(response)
+        logger.info(f"Article filter response after parsing: {results}")
+        return results
 
     async def expand_parse(self,
                            query: str,

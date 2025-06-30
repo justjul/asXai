@@ -1793,7 +1793,7 @@ export default function ChatApp() {
                           fontFamily: 'var(--main-font)',
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: '250px' }}>
+                        <div style={{ flex: 1}}>
                           <label
                             style={{
                               fontWeight: 'bold',
@@ -1819,7 +1819,7 @@ export default function ChatApp() {
                             />
                           </label>
                         </div>
-                        <div style={{ flex: 1, minWidth: '250px' }}>
+                        <div style={{ flex: 1}}>
                           <label
                             style={{
                               fontWeight: 'bold',

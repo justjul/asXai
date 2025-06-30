@@ -475,6 +475,18 @@ async def chat_process(payload, inference_manager):
                 paper_results = [
                     p for p in paper_results if p['paperId'] not in search_query.get('paperIds', [])[2:]]
 
+                filt_papers = await inference_manager.filterArticles(
+                    query='/n'.join(search_query.get('queries', '')),
+                    documents=serialize_documents(paper_results),
+                    model=model_name
+                )
+                filt_paperIds = filt_papers.get('paperIds', []) or []
+                logger.info(f"filtered paperIds {filt_paperIds}")
+
+                # filtering results based on MCP for article filtering
+                paper_results = [
+                    p for p in paper_results if p['paperId'] in filt_paperIds]
+
                 search_query['paperIds'].extend(
                     [p['paperId'] for p in paper_results])
                 papers.extend(paper_results)
@@ -504,7 +516,7 @@ async def chat_process(payload, inference_manager):
                 search_query=search_query,
             )
 
-        if chat_manager.mode in ["expand"] and search_query:
+        if chat_manager.mode in ["expand"] and search_query and papers:
             startime = time.time()
             chat_manager.stream(" *Generating Plan*")
             generationPlan = await inference_manager.generatePlan(
@@ -595,7 +607,7 @@ async def chat_process(payload, inference_manager):
 
                 chat_manager.stream(chunk['content'])
 
-            if (not chat_manager.mode in ["update"]
+            if (not chat_manager.mode in ["update"] and papers
                     and (not search_query.get('cite_only', False)
                          or chat_manager.mode in ["expand"])):
                 content_editor = inference_manager.writer(
@@ -743,11 +755,15 @@ def run_chat_worker():
 def serialize_documents(documents: List[dict], include_abstract: bool = False):
     if not isinstance(documents, list):
         documents = [documents]
+
+    if not documents:
+        return ["No article relevant to the query were found in the database"]
+
     serialized = []
     try:
         for paper in documents:
             formatted_ref = ""
-            formatted_ref += f"--- Document ---\n"
+            formatted_ref += f"--- Article ---\n"
             formatted_ref += f"Article ID: [{paper['paperId']}]\n"
             formatted_ref += f"Title: {paper['title']}\n"
             formatted_ref += f"Authors: {paper['authorName'].split(',', 1)[0]} et al.\n"

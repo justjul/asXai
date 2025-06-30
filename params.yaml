@@ -160,14 +160,12 @@ chat:
 
              Given the full conversation context and the user request, you must extract a search expansion plan:\n
             - Break it down into 2-5 clear sub-queries that collectively cover its scope, in the same language as the user's.\n
+            - Fix original spelling mistakes in your subqueries if any.
             - Indicate whether the user's questions is acceptable in terms of ethical boundaries.\n
             - Indicate whether the user's question is in the scope of your domain of expertise as a scientific assistant.\n
             - Indicate whether the user is explicitely asking to insert citations in the provided text.\n
             - Indicate whether the user's question is explicitely restricted to an article mentioned previously in the conversation.\n
             - If the user's question is explicitely about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
-            - Indicate whether the user is explicitely asking to return only peer-reviewed/published articles.\n
-            - Indicate whether the user is explicitely asking to return only preprint articles from a preprint repository.\n
-            - If the user is explicitely asking to return articles from specific venues, return the corresponding venues.\n
 
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
@@ -189,13 +187,32 @@ chat:
             Output the result as a strictly valid JSON and nothing else.\n
             Here is the original query:\n
             <QUERY>
+  instruct_paperfilter: |
+            You are a research assistant helping to identify which of articles are useful to answer a user's question.
+
+            You receive:\n
+            - The user's queries.\n
+            - A list of retrieved articles, each with their article ID, title and author's names.\n
+
+            Given the list of retrieved articles provided in the context, your task is to:\n
+            - Indicate whether the provided articles are relevant to the user's questions.\n
+            - Extract the list of article IDs that provide useful content to help answer the user's questions. 
+            - Only include papers that contain actual knowledge relevant to the question.
+            
+            Format your output as a JSON object with the following fields:\n
+            <FIELDS>\n\n
+
+            Output the result as a strictly valid JSON and nothing else.\n
+            Here below are the user's queries:\n
+            <QUERY>
+
   instruct_genplan: |
             You are a generation planner for scientific answering.\n
             You receive:\n
             - The user's query.\n
             - A list of retrieved articles, each with their article ID, title and author's names.\n
 
-             Given the list of retrieved articles provided in the context, your task is to:\n
+            Given the list of retrieved articles provided in the context, your task is to:\n
             1- Break the answer into multiple **sections**
             2- For each section, generate a title and a short description of the scope of this section, in the same language as the user's query.\n
             3- Assign relevant paperIds for each section based on their content.\n
@@ -279,6 +296,7 @@ chat:
               - Or clearly mark it with `[unsupported]` if no article supports it.
             4. If multiple articles support the same idea, you may include multiple IDs, e.g., `[xxxx, xxxx]`.
             5. If article IDs mentioned by the writer are incorrect or fabricated, replace them with the correct ones.
+            6. Do **not** insert any citations other than those provided in the context.
             6. Ensure the tone remains **scientific, precise, and concise**, and do not introduce new claims.
 
             Do **not** include the title or anything else than the edited version.

@@ -303,6 +303,10 @@ class NotebookManager:
 
         all_query_ids = set([m.get("query_id") for m in chat_history if m.get(
             "role") == "assistant"])
+        all_paper_ids = set([
+            paper.get("paperId") for m in chat_history
+            for paper in m.get("papers", []) or []
+        ])
 
         search_path = self.get_search_path(task_id)
         query_results = self.collect_searches(task_id)
@@ -312,8 +316,9 @@ class NotebookManager:
         else:
             search_history = query_results
 
-        new_search_history = [pl for pl in search_history if pl.get(
-            "query_id", '').split('_', 1)[-1] in all_query_ids]
+        new_search_history = [
+            pl for pl in search_history if pl.get(
+                "query_id", '').split('_', 1)[-1] in all_query_ids and pl.get("paperId", '') in all_paper_ids]
 
         unique_papers = {}
         for paper in new_search_history:
@@ -325,4 +330,7 @@ class NotebookManager:
         with open(search_path, "w") as f:
             json.dump(new_search_history, f)
 
+        print(
+            f"DIFF in search history: {len(search_history) - len(new_search_history)} out of {len(search_history)}")
+        print(all_paper_ids)
         return len(search_history) - len(new_search_history)

@@ -53,7 +53,7 @@ class RobustKeyExtractor:
 
     def _extract_first(self, record: dict, candidates: list):
         for key, value in record.items():
-            if any(candidate in key.lower() for candidate in candidates):
+            if any(candidate.lower() in key.lower() for candidate in candidates):
                 return value
         return None
 
@@ -98,13 +98,26 @@ class ChatSummarizerMCP(BaseModel):
 
 class QueryParseMCP(BaseModel):
     authorName: Optional[str] = Field(
-        description="Author lastname(s) if specified")
+        description="Author lastname(s) if specified"
+    )
     publicationDate_start: Optional[str] = Field(
-        description="Date to start searching from (formatted as YYYY-MM-DD even if there's just a year mentioned)")
+        description="Date to start searching from (formatted as YYYY-MM-DD even if there's just a year mentioned)"
+    )
     publicationDate_end: Optional[str] = Field(
-        description="Date to stop searching at (formatted as YYYY-MM-DD even if there's just a year mentioned)")
+        description="Date to stop searching at (formatted as YYYY-MM-DD even if there's just a year mentioned)"
+    )
     cleaned_query: Optional[str] = Field(
-        description="The original query reformulated without author names or publication dates")
+        description="The original query reformulated without author names or publication dates"
+    )
+    peer_reviewed_only: bool = Field(
+        description="True or False; whether the user's is explicitely asking to return only peer-reviewed/published articles."
+    )
+    preprint_only: bool = Field(
+        description="True or False; whether the user's is explicitely asking to return only preprint articles from a preprint repository."
+    )
+    venues: bool = Field(
+        description="Venue the user is explicitely asking for, returned as a list of strings if applicable or an empty list otherwise. "
+    )
 
     @classmethod
     def generate_prompt(cls, instruct):
@@ -123,6 +136,9 @@ class QueryParseMCP(BaseModel):
             'authorName': ['authorName', 'author', 'name'],
             'publicationDate_start': ['publicationDate_start', 'start'],
             'publicationDate_end': ['publicationDate_end', 'end'],
+            'peer_reviewed_only': ['peer', 'reviewed', 'published'],
+            'preprint_only': ['preprint', 'repo'],
+            'venues': ['venue', 'journal'],
             'cleaned_query': ['cleaned_query', 'cleaned'],
         }
         extractor = RobustKeyExtractor(key_map)
@@ -142,7 +158,8 @@ class ExpandQueryMCP(BaseModel):
         description="True or False; whether the user's question is ethically acceptable."
     )
     scientific: bool = Field(
-        description="True or False; whether the user's question is 'scientific', i.e. in the scope of your expertise as a scientific assistant.")
+        description="True or False; whether the user's question is 'scientific', i.e. in the scope of your expertise as a scientific assistant."
+    )
     cite_only: bool = Field(
         description="True or False; whether the user's is explicitely asking to insert citation in the provided text."
     )
@@ -151,15 +168,6 @@ class ExpandQueryMCP(BaseModel):
     )
     search_paperIds: bool = Field(
         description="Article IDs of the articles the user is explicitely referring to, returned as a list of strings if applicable or an empty list otherwise. "
-    )
-    peer_reviewed_only: bool = Field(
-        description="True or False; whether the user's question is explicitely asking to return only peer-reviewed/published articles."
-    )
-    preprint_only: bool = Field(
-        description="True or False; whether the user's question is explicitely asking to return only preprint articles from a preprint repository."
-    )
-    venues: bool = Field(
-        description="Venue the user is explicitely asking for, returned as a list of strings if applicable or an empty list otherwise. "
     )
 
     @classmethod
@@ -181,9 +189,6 @@ class ExpandQueryMCP(BaseModel):
             'ethical': ['ethical', 'valid', 'acceptable'],
             'details': ['details'],
             'search_paperIds': ['paperIds', 'search', 'paper'],
-            'peer_reviewed_only': ['peer', 'reviewed', 'published'],
-            'preprint_only': ['preprint', 'repo'],
-            'venues': ['venue', 'journal'],
         }
         extractor = RobustKeyExtractor(key_map)
         return extractor.extract(res)
@@ -215,6 +220,39 @@ class KeywordsMCP(BaseModel):
             'key_concepts': ['key_concepts', 'key', 'concept'],
         }
         extractor = RobustKeyExtractor(key_map)
+        return extractor.extract(res)
+
+
+class RelevantPaperMCP(BaseModel):
+    relevant: List[str] = Field(
+        description="True or False; whether the provided articles are overall relevant to answer the user's question."
+    )
+    paperIds: List[str] = Field(
+        description="A list of paper IDs from the provided candidates that are relevant to answer the user's question."
+    )
+
+    @classmethod
+    def generate_prompt(cls, instruct: str) -> str:
+        fields = []
+        for field_name, field_obj in cls.model_fields.items():
+            description = field_obj.description or "No description"
+            fields.append(f"- {field_name}: {description}")
+        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
+        return prompt
+
+    @classmethod
+    def parse(cls, response):
+        msg = parse_model_response(response)
+        print(f"Article Filter msg content {msg}")
+        res = parse_mcp_response(msg['content'])
+        print(f"Article Filter parsed messages {res}")
+
+        key_map = {
+            'relevant': ['relevant', 'valid'],
+            'paperIds': ['paperId', 'paper', 'article', 'reference']
+        }
+        extractor = RobustKeyExtractor(key_map)
+
         return extractor.extract(res)
 
 
