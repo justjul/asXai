@@ -152,6 +152,15 @@ class ExpandQueryMCP(BaseModel):
     search_paperIds: bool = Field(
         description="Article IDs of the articles the user is explicitely referring to, returned as a list of strings if applicable or an empty list otherwise. "
     )
+    peer_reviewed_only: bool = Field(
+        description="True or False; whether the user's question is explicitely asking to return only peer-reviewed/published articles."
+    )
+    preprint_only: bool = Field(
+        description="True or False; whether the user's question is explicitely asking to return only preprint articles from a preprint repository."
+    )
+    venues: bool = Field(
+        description="Venue the user is explicitely asking for, returned as a list of strings if applicable or an empty list otherwise. "
+    )
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -172,7 +181,9 @@ class ExpandQueryMCP(BaseModel):
             'ethical': ['ethical', 'valid', 'acceptable'],
             'details': ['details'],
             'search_paperIds': ['paperIds', 'search', 'paper'],
-
+            'peer_reviewed_only': ['peer', 'reviewed', 'published'],
+            'preprint_only': ['preprint', 'repo'],
+            'venues': ['venue', 'journal'],
         }
         extractor = RobustKeyExtractor(key_map)
         return extractor.extract(res)

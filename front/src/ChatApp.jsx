@@ -1784,31 +1784,127 @@ export default function ChatApp() {
                           onChange={(e) => msg.search_query.queries = e.target.value.split('\n').strip('👉')}
                         />
                       </label>
-
-                      <label
+                      
+                      <div
                         style={{
-                          fontWeight: 'bold',
-                          fontStyle: 'italic',
+                          display: 'flex',
+                          gap: '1rem',
+                          marginBottom: '0.5rem',
                           fontFamily: 'var(--main-font)',
-                          fontSize: '0.75rem',
-                          display: 'block',
-                          marginBottom: '0.2rem'
                         }}
                       >
-                        Authors names<br />
-                        <input
-                          type="text"
-                          style={{
-                            width: '100%',
-                            backgroundColor: 'var(--main-fg)',
-                            border: '1px solid var(--main-border)',
-                            borderRadius: '50px',
-                          }}
-                          defaultValue={msg.search_query.authorName || ''}
-                          placeholder="name1, name2, ..."
-                          onChange={(e) => msg.search_query.authorName = e.target.value}
-                        />
-                      </label>
+                        <div style={{ flex: 1, minWidth: '250px' }}>
+                          <label
+                            style={{
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              fontFamily: 'var(--main-font)',
+                              fontSize: '0.75rem',
+                              display: 'block',
+                              marginBottom: '0.2rem'
+                            }}
+                          >
+                            Authors names<br />
+                            <input
+                              type="text"
+                              style={{
+                                width: '100%',
+                                backgroundColor: 'var(--main-fg)',
+                                border: '1px solid var(--main-border)',
+                                borderRadius: '50px',
+                              }}
+                              defaultValue={msg.search_query?.authorName || ''}
+                              placeholder="name1, name2, ..."
+                              onChange={(e) => msg.search_query.authorName = e.target.value}
+                            />
+                          </label>
+                        </div>
+                        <div style={{ flex: 1, minWidth: '250px' }}>
+                          <label
+                            style={{
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              fontFamily: 'var(--main-font)',
+                              fontSize: '0.75rem',
+                              display: 'block',
+                              marginBottom: '0.2rem'
+                            }}
+                          >
+                            Venues<br />
+                            <input
+                              type="text"
+                              style={{
+                                width: '100%',
+                                backgroundColor: 'var(--main-fg)',
+                                border: '1px solid var(--main-border)',
+                                borderRadius: '50px',
+                              }}
+                              defaultValue={msg.search_query?.venues || ''}
+                              placeholder="venue1, venue2, ..."
+                              onChange={(e) => msg.search_query.venues = e.target.value}
+                            />
+                          </label>
+                        </div>
+
+                        <div style={{ flex: 1}}>
+                          <label
+                            style={{
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              fontFamily: 'var(--main-font)',
+                              fontSize: '0.75rem',
+                              display: 'block',
+                              marginBottom: '0.2rem'
+                            }}
+                          >
+                            Peer-reviewed only<br />
+                          </label>
+                          <label 
+                          style={{ 
+                            fontSize: '0.75rem', 
+                            fontStyle: 'italic', 
+                            fontWeight: 'bold', 
+                            marginTop: '0.5rem',
+                          }}>
+                            <input
+                              type="checkbox"
+                              defaultChecked={msg.search_query?.peer_reviewed_only || false}
+                              onChange={(e) => (msg.search_query.peer_reviewed_only = e.target.checked)}
+                              style={{ marginRight: '0.5rem' }}
+                            />
+                            
+                          </label>
+                        </div>
+                        <div style={{ flex: 1}}>
+                          <label
+                            style={{
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              fontFamily: 'var(--main-font)',
+                              fontSize: '0.75rem',
+                              display: 'block',
+                              marginBottom: '0.2rem'
+                            }}
+                          >
+                            Preprints only<br />
+                          </label>
+                          <label 
+                          style={{ 
+                            fontSize: '0.75rem', 
+                            fontStyle: 'italic', 
+                            fontWeight: 'bold', 
+                            marginTop: '0.5rem',
+                          }}>
+                            <input
+                              type="checkbox"
+                              defaultChecked={msg.search_query?.preprint_only || false}
+                              onChange={(e) => (msg.search_query.preprint_only = e.target.checked)}
+                              style={{ marginRight: '0.5rem' }}
+                            />
+                            
+                          </label>
+                        </div>
+                      </div>
 
                       <div
                         style={{

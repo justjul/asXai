@@ -165,6 +165,9 @@ chat:
             - Indicate whether the user is explicitely asking to insert citations in the provided text.\n
             - Indicate whether the user's question is explicitely restricted to an article mentioned previously in the conversation.\n
             - If the user's question is explicitely about a specific article mentioned previously in the conversation, returns the corresponding article ID.\n
+            - Indicate whether the user is explicitely asking to return only peer-reviewed/published articles.\n
+            - Indicate whether the user is explicitely asking to return only preprint articles from a preprint repository.\n
+            - If the user is explicitely asking to return articles from specific venues, return the corresponding venues.\n
 
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n

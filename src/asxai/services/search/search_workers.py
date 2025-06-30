@@ -169,6 +169,13 @@ async def batch_and_save(raw_payloads):
         if search_queries[qid].get('search_paperIds', None):
             meta_filters[-1].append(['paperId', '==',
                                     search_queries[qid]['search_paperIds']])
+        if search_queries[qid].get('peer_reviewed_only', False):
+            meta_filters[-1].append(['venue', '!=', ['arxiv.org', 'bioRxiv']])
+        if search_queries[qid].get('preprint_only', False):
+            meta_filters[-1].append(['venue', '==', ['arxiv.org', 'bioRxiv']])
+        if search_queries[qid].get('venues', []):
+            meta_filters[-1].append(['venue', '==',
+                                    search_queries[qid].get('venues')])
 
         existing_results = load_existing_result(task_ids[qid])
         if paperLocks[qid]:
@@ -271,7 +278,10 @@ async def batch_and_save(raw_payloads):
             "parsed_query": {"query": search_queries[qid].get("query"),
                              "authorName": search_queries[qid].get("authorName"),
                              "publicationDate_start": search_queries[qid].get("publicationDate_start"),
-                             "publicationDate_end": search_queries[qid].get("publicationDate_end")},
+                             "publicationDate_end": search_queries[qid].get("publicationDate_end"),
+                             "peer_reviewed_only": search_queries[qid].get("query", False),
+                             "preprint_only": search_queries[qid].get("query", False),
+                             "venues": search_queries[qid].get("venues", []), },
             "query_embedding": []  # query_embeds[i].tolist()
         }
 
