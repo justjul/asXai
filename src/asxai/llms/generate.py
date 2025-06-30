@@ -1,3 +1,17 @@
+"""
+asXai LLM Inference Module
+--------------------------
+
+Manages all interactions with LLM backends (Ollama, Groq) for:
+- Model readiness checks and pulls
+- Synchronous and streaming chat completions
+- Utility methods for planning, writing sections, titles, summaries, query expansion, etc.
+- Token buffering to files or asyncio queues for SSE or streaming UIs
+
+Key Components:
+- InferenceManager: high-level API for generation and specialized tasks (plan, summarize, expand, etc.)
+"""
+
 import os
 import config
 import asyncio
@@ -14,61 +28,83 @@ import time
 from dateutil.parser import parse
 from datetime import datetime
 
-from .mcp_library import QueryParseMCP, ExpandQueryMCP, KeywordsMCP, NotebookTitleMCP, ChatSummarizerMCP, RelevantPaperMCP
-from .mcp_library import QuickReplyMCP, GenerationPlannerMCP, SectionGenerationMCP, parse_model_response
-
 from tqdm import tqdm
 from asxai.utils import load_params
 from asxai.utils import running_inside_docker
 
 from asxai.logger import get_logger
 
+# Import custom MCP prompt/parse classes
+from .mcp_library import (
+    QueryParseMCP, ExpandQueryMCP, KeywordsMCP,
+    NotebookTitleMCP, ChatSummarizerMCP,
+    RelevantPaperMCP, GenerationPlannerMCP,
+    parse_model_response
+)
+
+# Initialize logger
 logger = get_logger(__name__, level=config.LOG_LEVEL)
 
+# Load LLM and chat configuration
 params = load_params()
-embedding_config = params["embedding"]
-qdrant_config = params["qdrant"]
 llm_config = params["llm"]
 chat_config = params["chat"]
 
 
 class InferenceManager:
-    def __init__(self,
-                 model_name: str = llm_config["model_name"],
-                 client_timeout: float = llm_config["client_timeout"],
-                 watch_tmp_timeout: float = llm_config["watch_tmp_timeout"],
-                 max_threads: int = llm_config["max_threads"]):
+    """
+    Orchestrates LLM interactions via Ollama (local) or Groq (cloud).
+    Provides methods for:
+      - Streaming tokens to file or queue (for SSE)
+      - Single-shot generate() calls
+      - Specialized routines: generatePlan, writer, generateTitle, chatSummarize, processQuery, expand, keywords, parse, filterArticles
+    """
 
-        self.container_name = "ollama"
+    def __init__(
+        self,
+        model_name: str = llm_config["model_name"],
+        client_timeout: float = llm_config["client_timeout"],
+        watch_tmp_timeout: float = llm_config["watch_tmp_timeout"],
+        max_threads: int = llm_config["max_threads"]
+    ):
+        # Core settings
         self.model_name = model_name
-
-        self.model_list = llm_config["model_list"]
-
-        self.ollama_port = llm_config["ollama_port"]
-        self.ollama_host = "ollama" if running_inside_docker(
-        ) else llm_config["host"]
-
-        self.meta_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
-                            'citationCount', 'influentialCitationCount',
-                            'publicationDate', 'publicationYear'}
-
         self.client_timeout = client_timeout
         self.watch_tmp_timeout = watch_tmp_timeout
         self.max_threads = max_threads
 
+        self.model_list = llm_config["model_list"]
+
+        # Determine host for Ollama (container vs local)
+        self.ollama_port = llm_config["ollama_port"]
+        self.ollama_host = "ollama" if running_inside_docker(
+        ) else llm_config["host"]
+
+        # Ensure Ollama service is up
         self.is_ollama_running()
+
+        # Initialize asynchronous clients
         self.client_ollama = AsyncClient(
-            host=f"http://{self.ollama_host}:{self.ollama_port}", timeout=client_timeout
+            host=f"http://{self.ollama_host}:{self.ollama_port}",
+            timeout=client_timeout
         )
         self.client_groq = AsyncGroq(
-            api_key=os.getenv("GROQ_API_KEY"), timeout=client_timeout, max_retries=5
+            api_key=os.getenv("GROQ_API_KEY"),
+            timeout=client_timeout,
+            max_retries=5
         )
+
+        # Limit concurrent calls
         self.semaphore = asyncio.Semaphore(self.max_threads)
 
-    def is_ollama_running(self):
+    def is_ollama_running(self) -> None:
+        """
+        Polls the Ollama HTTP endpoint until it responds 200 or timeout.
+        Logs status and errors.
+        """
         ready = False
-        endtime = time.time() + self.client_timeout
         url = f"http://{self.ollama_host}:{self.ollama_port}"
+        endtime = time.time() + self.client_timeout
         n_retry = 0
 
         while time.time() < endtime:
@@ -78,18 +114,20 @@ class InferenceManager:
                     if n_retry > 0:
                         logger.info("Ollama service is up and running.")
                     ready = True
-                    break
+                    return
             except requests.exceptions.RequestException:
                 pass
             logger.debug("Ollama not ready yet. Retrying in 3 seconds...")
             n_retry += 1
             time.sleep(3)
 
-        if not ready:
-            logger.error(
-                f"Ollama container '{self.container_name}' did not become ready within timeout.")
+        logger.error(f"Ollama did not respond within {self.client_timeout}s.")
 
-    async def is_model_pulled(self):
+    async def is_model_pulled(self) -> None:
+        """
+        Ensures the specified Ollama model is downloaded locally.
+        Pulls if not present.
+        """
         try:
             if 'ollama' in self.model_name:
                 model_name = self.model_name.split('/', 1)[-1]
@@ -108,24 +146,36 @@ class InferenceManager:
             logger.error(
                 f"Failed to check/pull model '{self.model_name}': {e}")
 
-    def resolve_model(self, override):
+    def resolve_model(self, override: str) -> Tuple[str, str]:
+        """
+        Resolves provider and model ID from override or default.
+        Validates against configured model list.
+        """
         model_name = self.model_name if override == "default" else override
-        if model_name not in llm_config['model_list']:
+        if model_name not in llm_config.get("model_list", []):
             model_name = self.model_name
         [provider, model_id] = model_name.split('/', 1)
-        return provider, model_id
+        return (provider, model_id)
 
-    async def stream_to_file(self, streamer, stream_path):
-        full_response = ""
-        think_response = ""
-        buffer = ""
+    async def stream_to_file(
+        self,
+        streamer,
+        stream_path: Union[str, Path]
+    ) -> dict:
+        """
+        Consume an async token streamer, write tokens to file in chunks,
+        and return full 'content' and internal 'think' segments.
+        """
+        full, think, buffer = "", "", ""
         inside_think = False
+
         async for chunk in streamer:
             if hasattr(chunk, "message"):
                 token = chunk["message"]["content"]
             elif hasattr(chunk, "choices"):
                 token = chunk.choices[0].delta.content or ""
 
+            # Handle <think> markers
             if "<think>" in token:
                 inside_think = True
                 continue
@@ -135,29 +185,35 @@ class InferenceManager:
 
             if not inside_think:
                 buffer += token
-                full_response += token
+                full += token
             else:
-                think_response += token
+                think += token
 
+            # Flush buffer periodically
             if len(buffer) > 100:
-                with open(stream_path, "a") as stream_file:
-                    stream_file.write(buffer)
-                    stream_file.flush()
+                with open(stream_path, "a") as f:
+                    f.write(buffer)
+                    f.flush()
                 buffer = ""
 
         # Write any remaining buffer
         if len(buffer) > 0:
-            with open(stream_path, "a") as stream_file:
-                stream_file.write(buffer)
-                stream_file.flush()
+            with open(stream_path, "a") as f:
+                f.write(buffer)
+                f.flush()
 
-        return {'content': full_response, 'think': think_response}
+        return {'content': full, 'think': think}
 
-    async def stream_to_queue(self, streamer, queue: asyncio.Queue):
-        full_response = ""
-        think_response = ""
-        buffer = ""
-        think_buffer = ""
+    async def stream_to_queue(
+        self,
+        streamer,
+        queue: asyncio.Queue
+    ) -> None:
+        """
+        Similar to stream_to_file, but pushes token dicts into an asyncio.Queue
+        for real-time consumption (e.g., SSE).
+        """
+        buffer, think_buffer = "", ""
         inside_think = False
         async for chunk in streamer:
             if hasattr(chunk, "message"):
@@ -174,10 +230,8 @@ class InferenceManager:
 
             if not inside_think:
                 buffer += token
-                full_response += token
             else:
                 think_buffer += token
-                think_response += token
 
             if len(buffer) > 100 or len(think_buffer) > 100:
                 await queue.put({'content': buffer, 'think': think_buffer})
@@ -188,29 +242,58 @@ class InferenceManager:
         if len(buffer) > 0 or len(think_buffer) > 0:
             await queue.put({'content': buffer, 'think': think_buffer})
 
+        # Sentinel
         await queue.put(None)
 
-    async def response_to_queue(self, coro, queue):
+    async def response_to_queue(
+        self,
+        coro,
+        queue: asyncio.Queue
+    ) -> None:
+        """
+        Awaits a coroutine that returns a single response, then puts it in the queue.
+        Captures exceptions as queue items.
+        """
         try:
             response = await coro
             await queue.put(response)
         except Exception as e:
             await queue.put(e)
 
-    async def generate(self, messages, **kwargs):
+    async def generate(
+        self, messages: List[dict],
+        **kwargs
+    ) -> Union[str, AsyncGenerator]:
+        """
+        High-level chat call. Supports Ollama or Groq providers, streaming or not.
+
+        Args:
+            messages: List[{"role": "...", "content": "..."}]
+            kwargs: includes 'model', 'stream', and any provider-specific options (e.g. temperature).
+
+        Returns:
+            If stream=True, returns an async generator. Else, returns a string response.
+        """
         provider, model_name = self.resolve_model(
             kwargs.pop("model", "default"))
         stream = kwargs.pop("stream", False)
+
+        # Ollama path
         if provider.lower() == "ollama":
             options = kwargs
             async with self.semaphore:
                 if stream:
-                    streamer = await self.client_ollama.chat(model=model_name, messages=messages, stream=True, options=options)
+                    streamer = await self.client_ollama.chat(
+                        model=model_name, messages=messages, stream=True, options=options
+                    )
                     return streamer
                 else:
-                    response = await self.client_ollama.chat(model=model_name, messages=messages, stream=False, options=options)
+                    response = await self.client_ollama.chat(
+                        model=model_name, messages=messages, stream=False, options=options
+                    )
                     return response['message']['content']
-        elif provider.lower() == "groq":
+        # Groq path
+        if provider.lower() == "groq":
             async with self.semaphore:
                 if stream:
                     streamer = await self.client_groq.chat.completions.create(
@@ -229,22 +312,22 @@ class InferenceManager:
                     )
                     return response.choices[0].message.content
 
-    async def generatePlan(self, query: str,
-                           documents: str,
-                           genplan_instruct: str = chat_config['instruct_genplan'],
-                           **kwargs) -> List[dict]:
+    # ----- Specialized MCP-based methods -----
 
-        # articles_serialized = "- ARTICLES:\n" + '\n'.join(documents)
-        # query_serialized = "- QUERY:\n" + query
-
-        # instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
-        # prompt = instruct.replace(
-        #     "<QUERY>", articles_serialized + query_serialized)
-
+    async def generatePlan(
+        self, query: str,
+        documents: List[str] = None,
+        genplan_instruct: str = chat_config['instruct_genplan'],
+        **kwargs
+    ) -> List[dict]:
+        """
+        Builds a multi-step plan from a query, using the GenerationPlannerMCP.
+        """
         instruct = GenerationPlannerMCP.generate_prompt(genplan_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
-        messages = [{'role': 'user', 'content': doc} for doc in documents]
+        messages = [{'role': 'user', 'content': doc}
+                    for doc in (documents or [])]
         messages += [{'role': 'user', 'content': prompt}]
 
         response = await self.generate(messages=messages, **kwargs)
@@ -253,13 +336,17 @@ class InferenceManager:
 
         return result
 
-    async def writer(self, title: str = '',
-                     content: str = None,
-                     documents: str = '',
-                     context: List[dict] = None,
-                     instruct: str = chat_config['instruct_gensection'],
-                     **kwargs):
-
+    async def writer(
+        self, title: str = '',
+        content: str = None,
+        documents: List[str] = None,
+        context: List[dict] = None,
+        instruct: str = chat_config['instruct_gensection'],
+        **kwargs
+    ):
+        """
+        Generates a structured section of content based on title/content templates + documents/context.
+        """
         prompt = instruct.replace("<TITLE>", title)
         prompt = instruct.replace("<CONTENT>", content)
 
@@ -270,21 +357,24 @@ class InferenceManager:
                     for msg in context]
             )
         messages.extend([{'role': 'user', 'content': doc}
-                        for doc in documents])
+                        for doc in (documents or [])])
         messages.extend([{'role': 'user', 'content': prompt}])
 
-        stream = kwargs.pop("stream", False)
-        if stream:
-            streamer = await self.generate(messages=messages, stream=stream, **kwargs)
-            return streamer
-        else:
-            response = await self.generate(messages=messages, stream=stream, **kwargs)
-            res = parse_model_response(response)
-            return res
+        if kwargs.pop("stream", False):
+            return await self.generate(messages=messages, stream=True, **kwargs)
 
-    async def generateTitle(self, query: str,
-                            title_instruct: str = chat_config['instruct_title'],
-                            **kwargs) -> dict:
+        response = await self.generate(messages=messages, stream=False, **kwargs)
+        res = parse_model_response(response)
+        return res
+
+    async def generateTitle(
+        self, query: str,
+        title_instruct: str = chat_config['instruct_title'],
+        **kwargs
+    ) -> dict:
+        """
+        Generates a notebook title suggestion from a query.
+        """
         instruct = NotebookTitleMCP.generate_prompt(title_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
@@ -295,27 +385,30 @@ class InferenceManager:
 
         return result
 
-    async def chatSummarize(self, chat_history: list[dict],
-                            chatSummary_instruct:  str = chat_config['instruct_chatSummary'],
-                            summary_len: int = chat_config['summary_length'],
-                            **kwargs) -> str:
+    async def chatSummarize(
+        self,
+        chat_history: list[dict],
+        chatSummary_instruct:  str = chat_config['instruct_chatSummary'],
+        summary_len: int = chat_config['summary_length'],
+        **kwargs
+    ) -> str:
+        """
+        Produces a concise summary of recent chat history.
+        """
         instruct = ChatSummarizerMCP.generate_prompt(chatSummary_instruct)
         instruct = instruct.replace("<SUMMARY_LENGTH>", str(summary_len))
 
-        summaries_serialized = "- PREVIOUS SUMMARIES:\n"
-        chat_serialized = "- RECENT HISTORY:\n"
+        # Flatten history into two sections
+        prev, recent = "- PREVIOUS SUMMARIES:\n", "- RECENT HISTORY:\n"
         for turn in chat_history:
-            if turn['model'] != 'search-worker':
-                if turn['model'] != 'summarizer':
-                    role = turn['role'].capitalize()
-                    content = turn['content']
-                    chat_serialized += f"    + {role}: {content}\n"
+            if turn["model"] != "search-worker":
+                content = turn["content"]
+                if turn["model"] == "summarizer":
+                    prev += f"  + {content}\n"
                 else:
-                    content = turn['content']
-                    summaries_serialized += f"    + {content}\n"
+                    recent += f"  + {turn['role'].capitalize()}: {content}\n"
 
-        prompt = instruct.replace(
-            "<HISTORY>", summaries_serialized + chat_serialized)
+        prompt = instruct.replace("<HISTORY>", prev + recent)
 
         messages = [{'role': 'user', 'content': prompt}]
 
@@ -325,9 +418,30 @@ class InferenceManager:
 
         return res['content']
 
-    async def processQuery(self, query: str, chat_history: List[dict],
-                           expand_instruct: str = chat_config['instruct_expand'],
-                           **kwargs):
+    async def processQuery(
+        self,
+        query: str,
+        chat_history: List[dict],
+        expand_instruct: str = chat_config['instruct_expand'],
+        **kwargs
+    ) -> dict:
+        """
+        Full query processing pipeline:
+          1) Expand the user query into refined questions.
+          2) Optionally extract keywords and parse query structure.
+          3) Combine everything into a single result dict.
+
+        Args:
+            query: Original user query.
+            chat_history: List of prior messages for context.
+            expand_instruct: Instruction template for query expansion.
+            **kwargs: Passed to generate() for model options.
+
+        Returns:
+            Dict containing expanded queries, keywords, parsed fields, and
+            any search_paperIds identified.
+        """
+        # Build expansion prompt and messages
         instruct = ExpandQueryMCP.generate_prompt(expand_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
@@ -335,9 +449,9 @@ class InferenceManager:
                    for msg in chat_history]
         messages = context + [{'role': 'user', 'content': prompt}]
 
+        # Call LLM to expand query
         response = await self.generate(messages=messages, **kwargs)
         result = ExpandQueryMCP.parse(response)
-
         logger.info(f"Expand results: {result}")
 
         queries = result.get('queries', [])
@@ -347,29 +461,45 @@ class InferenceManager:
         if not details:
             result['search_paperIds'] = []
 
-        # This is a temporary fix before we adjust search strategy with multiple questions:
-        # We concatenate questions to deal with a single search per user's query.
+        # We concatenate questions to deal with a single search to parse.
         query_to_parse = ' '.join(queries)
 
-        results = []
+        # derive keywords and parse structure if question is valid
         if scientific and ethical:
             payload = await self.keywords(query=query_to_parse, **kwargs)
             parsed = await self.parse(query_to_parse, **kwargs)
         else:
             payload, parsed = {}, {}
 
+        # If expansion yields paper IDs from context, skip parsing
         if result['search_paperIds']:
             parsed = {}
 
+        # Merge all results
         results = {**result, **payload, **parsed}
-
         logger.info(f"Expand + Keywords + Parsed results: {results}")
 
         return results
 
-    async def expand(self, query: str, chat_history: List[dict],
-                     expand_instruct: str = chat_config['instruct_expand'],
-                     **kwargs):
+    async def expand(
+        self, query: str,
+        chat_history: List[dict],
+        expand_instruct: str = chat_config['instruct_expand'],
+        **kwargs
+    ) -> List[dict]:
+        """
+        Query expansion, identification of explicitely referred papers, 
+        ethical check, etc using ExpandQueryMCP
+
+        Args:
+            query: Original user query.
+            chat_history: Prior conversation for context.
+            expand_instruct: Instruction template for expansion.
+            **kwargs: Passed to generate().
+
+        Returns:
+            List of dicts with expanded 'queries', 'scientific', 'ethical', searched_paperIds, etc.
+        """
         instruct = ExpandQueryMCP.generate_prompt(expand_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
@@ -382,9 +512,22 @@ class InferenceManager:
 
         return results
 
-    async def keywords(self, query: str,
-                       keyword_instruct: str = chat_config['instruct_keyword'],
-                       **kwargs):
+    async def keywords(
+        self, query: str,
+        keyword_instruct: str = chat_config['instruct_keyword'],
+        **kwargs
+    ) -> dict:
+        """
+        Extracts relevant keywords from the query using the KeywordsMCP.
+
+        Args:
+            query: The user's question.
+            keyword_instruct: Instruction template for keyword extraction.
+            **kwargs: Passed to generate().
+
+        Returns:
+            Dict of extracted keywords, e.g. {'keywords': [...]}.
+        """
         instruct = KeywordsMCP.generate_prompt(keyword_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
@@ -395,95 +538,65 @@ class InferenceManager:
 
         return result
 
-    async def parse(self, query: str,
-                    parse_instruct: str = chat_config['instruct_parse'],
-                    **kwargs):
+    async def parse(
+        self, query: str,
+        parse_instruct: str = chat_config['instruct_parse'],
+        **kwargs
+    ) -> dict:
+        """
+        Parses the query into structured fields using QueryParseMCP
+        (e.g., authors, date ranges, venue, article type).
 
+        Args:
+            query: The user's question.
+            parse_instruct: Instruction template for parsing.
+            **kwargs: Passed to generate().
+
+        Returns:
+            Dict of parsed parameters for downstream search.
+        """
         instruct = QueryParseMCP.generate_prompt(parse_instruct)
         prompt = instruct.replace("<QUERY>", query)
 
         messages = [{'role': 'user', 'content': prompt}]
 
-        response = await self.generate(messages=messages, temperature=0.0, **kwargs)
+        temperature = kwargs.pop('temperature', 0.0)
+        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
         result = QueryParseMCP.parse(response)
 
         return result
 
-    async def filterArticles(self, query: str = None,
-                             documents: str = '',
-                             instruct: str = chat_config['instruct_paperfilter'],
-                             **kwargs):
+    async def filterArticles(
+        self,
+        query: str = None,
+        documents: List[str] = None,
+        instruct: str = chat_config['instruct_paperfilter'],
+        **kwargs
+    ) -> List[str]:
+        """
+        Filters a set of candidate papers based on relevance to the query, 
+        using RelevantPaperMCP.
 
+        Args:
+            query: The user's original query (optional).
+            documents: List of document text snippets to evaluate.
+            instruct: Instruction template for filtering.
+            **kwargs: Passed to generate() (e.g., temperature).
+
+        Returns:
+            List of paper IDs or titles deemed relevant.
+        """
+        # Build prompt combining docs + filtering instruction
         instruct = RelevantPaperMCP.generate_prompt(instruct)
         prompt = instruct.replace("<QUERY>", query)
 
         messages = []
         messages.extend([{'role': 'user', 'content': doc}
-                        for doc in documents])
+                        for doc in (documents or [])])
         messages.extend([{'role': 'user', 'content': prompt}])
 
         temperature = kwargs.pop('temperature', 0.0)
         response = await self.generate(messages=messages, temperature=temperature, **kwargs)
-        logger.info(f"Article filter response: {response}")
         results = RelevantPaperMCP.parse(response)
         logger.info(f"Article filter response after parsing: {results}")
         return results
-
-    async def expand_parse(self,
-                           query: str,
-                           expand_instruct: str = llm_config['expand_instruct'],
-                           parse_instruct: str = llm_config['parse_instruct'],
-                           **kwargs):
-        expanded = await self.expand(query, expand_instruct=expand_instruct, **kwargs)
-        result = await self.parse(expanded, parse_instruct=parse_instruct, **kwargs)
-        return result
-
-    async def expand_parse_batch(self,
-                                 queries: List[str],
-                                 query_ids: List[int] = None,
-                                 expand_instruct: str = llm_config['expand_instruct'],
-                                 parse_instruct: str = llm_config['parse_instruct'],
-                                 **kwargs):
-        if not query_ids:
-            query_ids = [k for k in range(len(queries))]
-
-        tasks = [self.expand_parse(query=Qstr,
-                                   expand_instruct=expand_instruct,
-                                   parse_instruct=parse_instruct,
-                                   **kwargs)
-                 for Qstr in queries]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        final_results = {}
-        for qid, res in zip(query_ids, results):
-            if isinstance(res, Exception):
-                logger.error(f"Query {qid} failed: {res}")
-            else:
-                final_results[qid] = res
-        return final_results
-
-    async def generate_batch(self,
-                             queries: List[str],
-                             query_ids: List[int] = None,
-                             context_msg: List[List[dict]] = None,
-                             **kwargs):
-        if not query_ids:
-            query_ids = [k for k in range(len(queries))]
-        if not context_msg:
-            context_msg = [[] for _ in range(len(queries))]
-
-        query_msgs = [{'role': 'user', 'content': f"{Qstr}"}
-                      for Qstr in queries]
-        tasks = [self.generate(messages=Cmsg + [Qmsg], **kwargs)
-                 for Qmsg, Cmsg in zip(query_msgs, context_msg)]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        final_results = {}
-        for qid, res in zip(query_ids, results):
-            if isinstance(res, Exception):
-                logger.error(f"Query {qid} failed: {res}")
-            else:
-                final_results[qid] = res
-        return final_results

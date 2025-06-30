@@ -1,7 +1,20 @@
-from pydantic import BaseModel, field_validator, Field
-from typing import Optional, List
-from datetime import datetime
-from dateutil.parser import parse as date_parse
+"""
+asXai MCP Library
+-----------------
+
+Defines Pydantic models and utilities for the “Model Context Protocol” (MCP)
+used to structure prompts and parse LLM JSON-like responses.
+
+Components:
+- parse_model_response: Extracts <think> segments and main content.
+- parse_mcp_response: Safely locates and decodes JSON blocks in raw text.
+- RobustKeyExtractor: Maps varied JSON keys to standardized fields.
+- BaseModel subclasses (NotebookTitleMCP, ChatSummarizerMCP, etc.): 
+  generate prompt templates and parse model outputs into structured data.
+"""
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, TypedDict
 import json
 import re
 
@@ -11,47 +24,97 @@ from asxai.logger import get_logger
 logger = get_logger(__name__, level=config.LOG_LEVEL)
 
 
-def parse_model_response(response):
+def parse_model_response(response: str) -> Dict[str, str]:
+    """
+    Splits model output into 'content' and optional 'think' segments
+    demarcated by <think>...</think> tags.
+
+    Args:
+        response: Raw string from the LLM.
+
+    Returns:
+        Dict with keys:
+          - 'content': visible content without think sections.
+          - 'think': concatenated content inside <think> tags.
+    """
     think_labels = [('<think>', '</think>')]
 
     for start_tag, end_tag in think_labels:
         if start_tag in response and end_tag in response:
+            # Extract think segment
             pattern = re.escape(start_tag) + r"(.*?)" + re.escape(end_tag)
             think_match = re.search(pattern, response, flags=re.DOTALL)
             think = think_match.group(1).strip() if think_match else ""
+            # Remove think segment from main content
             content = re.sub(pattern, "", response, flags=re.DOTALL).strip()
             return {"content": content, "think": think}
-
+    # No think tags found
     return {"content": response.strip(), "think": ""}
 
 
-def parse_mcp_response(text: str):
+def parse_mcp_response(text: str) -> Dict[str, Any]:
+    """
+    Locates the first JSON object in a text block and decodes it,
+    with resilience to Python 'None' tokens.
+
+    Args:
+        text: Raw string potentially containing a JSON substring.
+
+    Returns:
+        Parsed dict if successful, else empty dict.
+    """
     try:
+        # Find JSON object boundaries
         start = text.index('{')
         end = text.rindex('}') + 1
         json_block = text[start:end]
         json_block = json_block.replace("None", "null")
-        dic = json.loads(json_block)
-        norm_dic = dic
-
-        return norm_dic
+        return json.loads(json_block)
     except (ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"JSON decoding error on {text}: {e}")
+        logger.warning(f"JSON decoding error  in MCP response {text}: {e}")
         return {}
 
 
 class RobustKeyExtractor:
-    def __init__(self, key_map):
+    """
+    Utility to normalize varied JSON key names into a fixed output schema.
+
+    Example:
+        key_map = {'title': ['title', 'topic'], ...}
+        extractor = RobustKeyExtractor(key_map)
+        extractor.extract(parsed_dict) -> {'title': value}
+    """
+
+    def __init__(self, key_map: Dict[str, List[str]]):
         self.key_map = key_map
 
-    def extract(self, record: dict):
+    def extract(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extracts values for each target field from the record.
+
+        Args:
+            record: Parsed JSON dict from the model.
+
+        Returns:
+            Dict mapping each key_map target to its first matching value.
+        """
         extracted = {}
         for target_field, candidates in self.key_map.items():
             value = self._extract_first(record, candidates)
             extracted[target_field] = value
         return extracted
 
-    def _extract_first(self, record: dict, candidates: list):
+    def _extract_first(self, record: Dict[str, Any], candidates: List[str]) -> Any:
+        """
+        Finds the first record key containing any of the candidate substrings.
+
+        Args:
+            record: JSON dict.
+            candidates: List of substrings to match against record keys.
+
+        Returns:
+            Corresponding value or None if no match.
+        """
         for key, value in record.items():
             if any(candidate.lower() in key.lower() for candidate in candidates):
                 return value
@@ -59,11 +122,25 @@ class RobustKeyExtractor:
 
 
 class NotebookTitleMCP(BaseModel):
+    """
+    MCP model for generating notebook titles.
+    Fields:
+        title: Short 1-3 word title, no punctuation.
+    """
     title: str = Field(
         description="A short, clear title summarizing the user query as a notebook topic. Should be 1-3 words. No periods.")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<QUERY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -72,7 +149,16 @@ class NotebookTitleMCP(BaseModel):
         return prompt
 
     @classmethod
-    def parse(cls, response):
+    def parse(cls, response: str) -> Dict[str, Any]:
+        """
+        Parses the LLM response into the NotebookTitleMCP schema.
+
+        Args:
+            response: Raw LLM output text.
+
+        Returns:
+            Dict with 'title' key.
+        """
         msg = parse_model_response(response)
         res = parse_mcp_response(msg['content'])
         key_map = {
@@ -83,11 +169,25 @@ class NotebookTitleMCP(BaseModel):
 
 
 class ChatSummarizerMCP(BaseModel):
+    """
+    MCP model to summarize chat history into key topics.
+    Fields:
+        content: Summary string.
+    """
     content: str = Field(
         description="A summary of the key topics discussed so far")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -97,6 +197,12 @@ class ChatSummarizerMCP(BaseModel):
 
 
 class QueryParseMCP(BaseModel):
+    """
+    MCP model to parse structured query parameters.
+    Fields:
+        authorName, publicationDate_start/end, cleaned_query,
+        peer_reviewed_only, preprint_only, venues
+    """
     authorName: Optional[str] = Field(
         description="Author lastname(s) if specified"
     )
@@ -121,6 +227,15 @@ class QueryParseMCP(BaseModel):
 
     @classmethod
     def generate_prompt(cls, instruct):
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -150,6 +265,11 @@ class QueryParseMCP(BaseModel):
 
 
 class ExpandQueryMCP(BaseModel):
+    """
+    MCP model to expand a query into sub-questions and flags.
+    Fields:
+        queries, scientific, ethical, cite_only, details, search_paperIds
+    """
     queries: List[str] = Field(
         description="A list of 1-3 specific questions that collectively cover the user's query, returned as a list of strings."
         + "Each should be a clear, concise, and full sentence, suitable for retrieving relevant scientific documents.\n"
@@ -172,6 +292,15 @@ class ExpandQueryMCP(BaseModel):
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -195,6 +324,11 @@ class ExpandQueryMCP(BaseModel):
 
 
 class KeywordsMCP(BaseModel):
+    """
+    MCP model to extract keywords and topics from a query.
+    Fields:
+        research_field, main_topics, key_concepts
+    """
     research_field: str = Field(description="Relevant field of research among Computer science, Physics, Biology, or Medicine "
                                 + "returned as a list of strings.")
     main_topics: List[str] = Field(
@@ -204,6 +338,15 @@ class KeywordsMCP(BaseModel):
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -224,6 +367,12 @@ class KeywordsMCP(BaseModel):
 
 
 class RelevantPaperMCP(BaseModel):
+    """
+    MCP model to filter candidate papers for relevance.
+    Fields:
+        relevant: boolean flag.
+        paperIds: List of strings of IDs deemed relevant.
+    """
     relevant: List[str] = Field(
         description="True or False; whether the provided articles are overall relevant to answer the user's question."
     )
@@ -233,6 +382,15 @@ class RelevantPaperMCP(BaseModel):
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -257,6 +415,13 @@ class RelevantPaperMCP(BaseModel):
 
 
 class SectionPlan(BaseModel):
+    """
+    Defines a section plan as part of a generation plan.
+    Fields:
+        title: Sub-question title for the section.
+        scope: Description of section scope.
+        paperIds: IDs of papers supporting this section.
+    """
     title: str = Field(
         description="The title or sub-question to answer in this section")
     scope: str = Field(
@@ -266,12 +431,27 @@ class SectionPlan(BaseModel):
 
 
 class GenerationPlannerMCP(BaseModel):
+    """
+    MCP model to plan response structure.
+    Fields:
+        sections: List of SectionPlan entries.
+        abstract: 2-3 sentence summary answering the query.
+    """
     sections: List[SectionPlan]
     abstract: str = Field(
         description="A short summary of 2-3 sentences that answers the question")
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
         fields = []
         for field_name, field_obj in cls.model_fields.items():
             description = field_obj.description or "No description"
@@ -302,50 +482,3 @@ class GenerationPlannerMCP(BaseModel):
                 section["paperIds"] = all_paperIds
 
         return {"abstract": abstract, "sections": sections}
-
-
-class SectionGenerationMCP(BaseModel):
-    section_title: str = Field(
-        description="The title of the section being answered")
-    answer: str = Field(
-        description="The generated answer for this section, with inline citations to articles using their paperId in square brackets")
-    cited_papers: Optional[List[str]] = Field(
-        description="List of paperIds actually cited in the answer")
-
-    @classmethod
-    def generate_prompt(cls, instruct: str) -> str:
-        fields = []
-        for field_name, field_obj in cls.model_fields.items():
-            description = field_obj.description or "No description"
-            fields.append(f"- {field_name}: {description}")
-        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
-        return prompt
-
-
-class QuickReplyMCP(BaseModel):
-    summary: str = Field(
-        description="A concise scientific answer (max 2-3 paragraphs) that directly addresses the user query, using provided documents where possible. Inline citations use paperId in square brackets."
-    )
-    cited_papers: Optional[List[str]] = Field(
-        description="List of paperIds actually cited in the answer"
-    )
-
-    @classmethod
-    def generate_prompt(cls, instruct: str) -> str:
-        fields = []
-        for field_name, field_obj in cls.model_fields.items():
-            description = field_obj.description or "No description"
-            fields.append(f"- {field_name}: {description}")
-        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
-        return prompt
-
-    @classmethod
-    def parse(cls, response):
-        msg = parse_model_response(response)
-        res = parse_mcp_response(msg['content'])
-        key_map = {
-            'summary': ['summary', 'answer', 'response', 'reply'],
-            'cited_papers': ['cited_papers', 'paperIds', 'papers', 'references'],
-        }
-        extractor = RobustKeyExtractor(key_map)
-        return extractor.extract(res)
