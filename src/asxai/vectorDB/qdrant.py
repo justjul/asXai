@@ -50,10 +50,11 @@ class QdrantManager:
         self.collection_name_chunks = self.collection_name + '_chunks'
         self.collection_name_ids = self.collection_name + '_ids'
         self.chunk_fields = {'paperId', 'fieldsOfStudy', 'venue', 'venue_lower', 'authorName',
-                             'citationCount', 'influentialCitationCount',
-                             'publicationDate', 'publicationYear', 'text', 'doi'}
+                             'citationCount', 'influentialCitationCount', 'isOpenAccess',
+                             'publicationDate', 'publicationYear', 'openAccessPdf',
+                             'text', 'doi'}
         self.id_fields = {'paperId', 'fieldsOfStudy', 'venue', 'venue_lower', 'authorName',
-                          'citationCount', 'influentialCitationCount',
+                          'citationCount', 'influentialCitationCount', 'isOpenAccess',
                           'publicationDate', 'publicationYear', 'openAccessPdf',
                           'title', 'abstract', 'main_text', 'doi'}
 

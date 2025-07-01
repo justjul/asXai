@@ -141,7 +141,7 @@ def get_s2_articles_batch(
                     lambda x: x['url'] if isinstance(x, dict) else x)
 
                 df_temp['doi'] = df_temp['externalIds'].apply(
-                    lambda x: x.get('DOI', '') if isinstance(x, dict) else x)
+                    lambda x: x.get('DOI', '') or x.get('ArXiv', '') or x.get('CorpusId', '') if isinstance(x, dict) else 'None')
 
                 # Flatten reference IDs and titles
                 df_temp['referenceIds'] = df_temp['references'].apply(
@@ -255,11 +255,16 @@ def get_s2_articles_year(
                     0)
                 df['openAccessPdf'] = df['openAccessPdf'].fillna('None')
 
+                # Keep only articles that are either openAccess or have at least
+                # their abstract available
+                df = df[df['isOpenAccess'] | (
+                    df['abstract'].notnull() & df['abstract'].astype(bool))]
+
             articles.append(df)
             pbar.set_postfix({
                 'batch start': start_idx + 1,
+                'status': f"{len(df)} new articles",
                 'token': token,
-                'status': f"{len(df)} new articles"
             })
             if not token:
                 if start_idx < N_articles - batch_size:
@@ -313,6 +318,7 @@ def update(
     # Compute citation thresholds per year
     citation_thresholds = np.maximum(
         0, min_citations_per_year * ((datetime.now().year - 2) - np.array(years)))
+    citation_thresholds = np.minimum(20, citation_thresholds)
 
     # Validate and join field lists
     fields_of_study_str = ','.join(s2_validate_fields(fields_of_study, {
@@ -323,7 +329,7 @@ def update(
         'title', 'citationCount', 'abstract', 'venue', 'authors', 'publicationDate', 'fieldsOfStudy'}))
 
     specs_str = ','.join(s2_validate_fields(fields_to_return, {
-        "influentialCitationCount", "openAccessPdf", "references", "externalIds", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
+        "influentialCitationCount", "openAccessPdf", "isOpenAccess", "references", "externalIds", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
 
     logger.info(f"will now load papers for {years} \n"
                 f"fields of study: {fields_of_study_str}\n"
@@ -345,10 +351,16 @@ def update(
         with open(txt_inprogress_dummy, "wb") as f:
             pickle.dump([0], f, protocol=pickle.HIGHEST_PROTOCOL)
 
+        # endpoint = (
+        #     f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
+        #     f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
+        #     f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
+        # )
+
         endpoint = (
             f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
             f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
-            f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
+            f'&minCitationCount={int(min_citation)}&year={year}'
         )
 
         articles = get_s2_articles_year(endpoint, specs_str, year)
@@ -356,7 +368,7 @@ def update(
         # Split into metadata vs text
         metadata = articles.drop(columns=['title', 'abstract', 'pdf_status'])
         text = articles[['paperId', 'title', 'abstract',
-                         'referenceTitles', 'openAccessPdf', 'pdf_status', 'doi']]
+                         'referenceTitles', 'openAccessPdf', 'isOpenAccess', 'pdf_status', 'doi']]
         text0 = text.copy()
 
         # Merge with existing files if they exist
@@ -547,6 +559,7 @@ def arX_to_dataframe(arX_data: pd.DataFrame) -> pd.DataFrame:
         r'\s+and\s+', ', ', regex=True)
     arX_norm["venue"] = 'arXiv.org'
     arX_norm["venue_lower"] = 'arxiv.org'
+    arX_norm["isOpenAccess"] = True
     arX_norm["authorId"] = None
     arX_norm["citationCount"] = None
     arX_norm["influentialCitationCount"] = None
@@ -738,7 +751,7 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year) -> None:
                                                   'authors_parsed', 'pdf_status'])
         arX_text = arX_data_new[['paperId',
                                  'title', 'abstract',
-                                 'openAccessPdf', 'pdf_status', 'doi']]
+                                 'openAccessPdf', 'isOpenAccess', 'pdf_status', 'doi']]
 
         # Merge with existing
         metadata = arX_metadata.set_index("doi").combine_first(

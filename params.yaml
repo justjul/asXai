@@ -3,6 +3,7 @@ download:
   fields_of_study:
     - Computer Science
     - Biology
+    - Medicine
     - Physics
     - Geology
     - Psychology
@@ -18,6 +19,7 @@ download:
     - publicationDate
     - fieldsOfStudy
     - influentialCitationCount
+    - isOpenAccess
     - openAccessPdf
     - references
     - externalIds

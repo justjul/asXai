@@ -920,8 +920,9 @@ def get_clean_block_text(text: str,
 def clean_full_text(pdf, extract_ref):
     try:
         full_text = pdf.get("full_text", "")
-        if not isinstance(full_text, str) or len(full_text) > 1_000_000 or len(full_text) < 500:
-            logger.warning("Skipping overly long or malformed full_text")
+        # if not isinstance(full_text, str) or len(full_text) > 1_000_000 or len(full_text) < 500:
+        if not isinstance(full_text, str) or len(full_text) < 100:
+            logger.warning("Skipping overly short or malformed full_text")
             pdf["main_text"], pdf["ref_text"] = "", ""
         else:
             pdf["main_text"], pdf["ref_text"] = get_clean_block_text(
