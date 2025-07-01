@@ -224,6 +224,9 @@ class QueryParseMCP(BaseModel):
     venues: bool = Field(
         description="Venue the user is explicitely asking for, returned as a list of strings if applicable or an empty list otherwise. "
     )
+    citationCount: bool = Field(
+        description="Minimal number of citations articles should have."
+    )
 
     @classmethod
     def generate_prompt(cls, instruct):
@@ -254,6 +257,7 @@ class QueryParseMCP(BaseModel):
             'peer_reviewed_only': ['peer', 'reviewed', 'published'],
             'preprint_only': ['preprint', 'repo'],
             'venues': ['venue', 'journal'],
+            'citationCount': ['citationCount', 'citation', 'count'],
             'cleaned_query': ['cleaned_query', 'cleaned'],
         }
         extractor = RobustKeyExtractor(key_map)

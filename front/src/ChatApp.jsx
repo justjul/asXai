@@ -1857,6 +1857,33 @@ export default function ChatApp() {
                               marginBottom: '0.2rem'
                             }}
                           >
+                            min Citations<br />
+                            <input
+                              type="text"
+                              style={{
+                                width: '100%',
+                                backgroundColor: 'var(--main-fg)',
+                                border: '1px solid var(--main-border)',
+                                borderRadius: '50px',
+                              }}
+                              defaultValue={msg.search_query?.citationCount || ''}
+                              placeholder="0"
+                              onChange={(e) => msg.search_query.citationCount = e.target.value}
+                            />
+                          </label>
+                        </div>
+
+                        <div style={{ flex: 1}}>
+                          <label
+                            style={{
+                              fontWeight: 'bold',
+                              fontStyle: 'italic',
+                              fontFamily: 'var(--main-font)',
+                              fontSize: '0.75rem',
+                              display: 'block',
+                              marginBottom: '0.2rem'
+                            }}
+                          >
                             Peer-reviewed only<br />
                           </label>
                           <label 
@@ -2226,8 +2253,10 @@ export default function ChatApp() {
                     </a>
                   </div>
                   <div style={{ fontSize: '0.75rem'}}>{p.authorName}</div>
-                  <div style={{ fontSize: '0.75rem'}}>{p.venue +' (' + p.publicationDate + ')'}</div>
-                  <div style={{ fontSize: '0.75rem'}}>{p.paperId} / score {p.score?.toFixed(2)}</div>
+                  <div style={{ fontSize: '0.75rem'}}
+                  >{p.venue} ({p.publicationDate}), {p.citationCount} citations, score: {p.score?.toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: '0.75rem'}}>{p.paperId}</div>
                   <div
                     style={{
                       marginTop: '0.5rem',

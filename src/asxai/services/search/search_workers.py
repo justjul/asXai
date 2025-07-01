@@ -176,6 +176,9 @@ async def batch_and_save(raw_payloads):
         if search_queries[qid].get('venues', []):
             meta_filters[-1].append(['venue', '==',
                                     search_queries[qid].get('venues')])
+        if search_queries[qid].get('citationCount', 0):
+            meta_filters[-1].append(['citationCount', 'gte',
+                                    search_queries[qid].get('citationCount')])
 
         existing_results = load_existing_result(task_ids[qid])
         if paperLocks[qid]:
