@@ -330,19 +330,17 @@ def update(
 
     for year, min_citation in zip(years, citation_thresholds):
         # Prepare directories and in-progress flags
-        year_metadata_dir = os.path.join(config.METADATA_PATH, str(year))
-        year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
+        year_metadata_dir = config.METADATA_PATH / str(year)
+        year_text_dir = config.TEXTDATA_PATH / str(year)
         os.makedirs(year_metadata_dir, exist_ok=True)
         os.makedirs(year_text_dir, exist_ok=True)
 
         # Creating dummy files to signal update is in progress
-        meta_inprogress_dummy = os.path.join(year_metadata_dir,
-                                             "inprogress.pkl")
+        meta_inprogress_dummy = year_metadata_dir / "inprogress.pkl"
         with open(meta_inprogress_dummy, "wb") as f:
             pickle.dump([0], f, protocol=pickle.HIGHEST_PROTOCOL)
 
-        txt_inprogress_dummy = os.path.join(year_text_dir,
-                                            "inprogress.pkl")
+        txt_inprogress_dummy = year_text_dir / "inprogress.pkl"
         with open(txt_inprogress_dummy, "wb") as f:
             pickle.dump([0], f, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -355,12 +353,6 @@ def update(
         articles = get_s2_articles_year(endpoint, specs_str, year)
 
         # Split into metadata vs text
-        metadata_fp = os.path.join(
-            year_metadata_dir, f'metadata_{year}.parquet')
-        text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
-        text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
-
-        # Merge with existing files if they exist
         metadata = articles.drop(columns=['title', 'abstract', 'pdf_status'])
         text = articles[['paperId', 'title', 'abstract',
                          'referenceTitles', 'openAccessPdf', 'pdf_status', 'doi']]
@@ -736,6 +728,7 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year) -> None:
         arX_data_new = arX_data_new[arX_data_new['publicationYear'].astype(
             int) == year]
         arX_data_new = arX_data_new.drop_duplicates(subset='title')
+        arX_data_new = arX_data_new.drop_duplicates(subset='doi')
 
         arX_metadata = arX_data_new.drop(columns=['title', 'abstract', 'submitter',
                                                   'comments', 'journal-ref',

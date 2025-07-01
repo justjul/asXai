@@ -108,8 +108,12 @@ class PDFextractor:
                                 f.flush()
                                 os.fsync(f.fileno())
 
-                            dic_path.with_suffix(
-                                ".inprogress").rename(dic_path)
+                            try:
+                                dic_path.with_suffix(
+                                    ".inprogress").rename(dic_path)
+                            except Exception as e:
+                                logger.warning(
+                                    f"Couldn't rename {dic_path}: {e}")
 
                         dir_list.remove(dirname)
                         if not self.keepPDF and os.path.isdir(dir_path):
@@ -208,6 +212,7 @@ def get_valid_pages(
                                 pending_tasks.remove(task)
 
                 pool.terminate()
+                pool.join()
                 if len(valid_pages) < n_pages:
                     missing_pages = [
                         p for p in page_list if p not in valid_pages]
@@ -420,11 +425,15 @@ def extraction_year_done(directory: str):
 
 def collect_extracted_ids(directory: str):
     dic_list = glob.glob(os.path.join(directory, "*.pkl"))
-    return [Path(f).stem for f in dic_list if 'done' not in Path(f).stem]
+    return [Path(f).stem for f in dic_list if Path(f).stem != 'done']
 
 
-def collect_extracted_PDFs(directory: str, paperIds: List[str]):
-    dic_list = glob.glob(os.path.join(directory, "*.pkl"))
+def collect_extracted_PDFs(directory: str, paperIds: List[str], batch_size: int = 32):
+    dic_list = sorted(
+        glob.glob(os.path.join(directory, "*.pkl")),
+        key=os.path.getmtime
+    )
+    dic_list = dic_list[:batch_size]
     final_results = []
     for paper_path in dic_list:
         if os.path.isfile(paper_path) and Path(paper_path).stem in paperIds:
@@ -644,16 +653,16 @@ def batch_full_extract(paperInfo,
 
             n_pending = len(pending_minibatches)
 
-            extract_pool = multiprocessing.Pool(
-                processes=min(n_pending, n_jobs),
-                initializer=partial(
-                    extract_worker_init,
-                    downloads_dir=downloads_dir,
-                    keepPDF=keep_pdfs,
-                    timeout=60,
-                    max_pages=max_pages))
+            with multiprocessing.Pool(
+                    processes=min(n_pending, n_jobs),
+                    initializer=partial(
+                        extract_worker_init,
+                        downloads_dir=downloads_dir,
+                        keepPDF=keep_pdfs,
+                        timeout=60,
+                        max_pages=max_pages
+                    )) as extract_pool:
 
-            with extract_pool:
                 async_extract = [extract_pool.apply_async(extract_PDFs_workers, (b,))
                                  for b in pending_minibatches]
 
@@ -755,8 +764,8 @@ def _get_ref_index(blocks, fs_normal_text):
     return ref_idx_start, ref_idx_end
 
 
-BLOCK_pattern = re.compile(
-    r'(?s)\*\*BLOCK\*\*fs==\s*([\d.]+)\*\*p==\s*([\d.]+)\*\*b==\s*([\d.]+)\*\*t==\s*([\d.]+)\*\*l==\s*([\d.]+)\*\*r==\s*([\d.]+)\*\*(.*?)(?=\*\*BLOCK\*\*fs==|$)')
+# BLOCK_pattern = re.compile(
+#     r'(?s)\*\*BLOCK\*\*fs==\s*([\d.]+)\*\*p==\s*([\d.]+)\*\*b==\s*([\d.]+)\*\*t==\s*([\d.]+)\*\*l==\s*([\d.]+)\*\*r==\s*([\d.]+)\*\*(.*?)(?=\*\*BLOCK\*\*fs==|$)')
 
 
 def _get_block_text_specs(text: str,
@@ -766,29 +775,67 @@ def _get_block_text_specs(text: str,
     all_b, all_t, all_l, all_r = [], [], [], []
     n_words = []
 
-    for match in BLOCK_pattern.finditer(text):
-        fs_val = float(match.group(1))
-        p_val = float(match.group(2))
-        b_val = float(match.group(3))
-        t_val = float(match.group(4))
-        l_val = float(match.group(5))
-        r_val = float(match.group(6))
-        content = match.group(7).strip()
-        words = content.split(' ')
+    chunks = text.split("**BLOCK**fs==")
+    blocks = []
+    for chunk in chunks[1:]:
+        try:
+            parts, content = chunk.split("**", 6), chunk.split("**", 7)[-1]
+            fs_val, p_val, b_val, t_val, l_val, r_val = map(
+                float, [s.split('==')[-1] for s in parts[:6]]
+            )
+            words = content.strip().split(" ")
 
-        nw = len([w for w in words if _is_normal_text(w)])
-        n_words.append(nw)
+            nw = len([w for w in words if _is_normal_text(w)])
+            n_words.append(nw)
 
-        all_fs.extend([fs_val]*nw)
-        all_p.extend([p_val]*nw)
-        all_b.extend([b_val]*nw)
-        all_t.extend([t_val]*nw)
-        all_l.extend([l_val]*nw)
-        all_r.extend([r_val]*nw)
+            all_fs += [fs_val]*nw
+            all_p += [p_val]*nw
+            all_b += [b_val]*nw
+            all_t += [t_val]*nw
+            all_l += [l_val]*nw
+            all_r += [r_val]*nw
 
-        blocks.append({'fontsize': fs_val, 'page': p_val, 'bottom': b_val, 'top': t_val,
-                       'left': l_val, 'right': r_val, 'nwords': nw,
-                       'content': content, 'possible_ref': False})
+            blocks.append({'fontsize': fs_val, 'page': p_val, 'bottom': b_val, 'top': t_val,
+                           'left': l_val, 'right': r_val, 'nwords': nw,
+                           'content': content, 'possible_ref': False})
+        except Exception as e:
+            logger.warning(f"Parsing of text blocks failed: {e}")
+            continue
+
+    # try:
+    #     matches = list(BLOCK_pattern.finditer(text))
+    # except re.error as e:
+    #     logger.warning(f"Regex parsing failed: {e}")
+    #     return "", ""
+
+    # if len(matches) > 1000:
+    #     logger.warning(
+    #         f"Unrealistic number of text blocks detected: {len(matches)}")
+    #     matches = matches[:500]
+
+    # for match in matches:
+    #     fs_val = float(match.group(1))
+    #     p_val = float(match.group(2))
+    #     b_val = float(match.group(3))
+    #     t_val = float(match.group(4))
+    #     l_val = float(match.group(5))
+    #     r_val = float(match.group(6))
+    #     content = match.group(7).strip()
+    #     words = content.split(' ')
+
+    #     nw = len([w for w in words if _is_normal_text(w)])
+    #     n_words.append(nw)
+
+    #     all_fs += [fs_val]*nw
+    #     all_p += [p_val]*nw
+    #     all_b += [b_val]*nw
+    #     all_t += [t_val]*nw
+    #     all_l += [l_val]*nw
+    #     all_r += [r_val]*nw
+
+    #     blocks.append({'fontsize': fs_val, 'page': p_val, 'bottom': b_val, 'top': t_val,
+    #                    'left': l_val, 'right': r_val, 'nwords': nw,
+    #                    'content': content, 'possible_ref': False})
 
     all_fs_ref = []
     if extract_ref:
@@ -823,10 +870,20 @@ def get_clean_block_text(text: str,
 
     blocks, specs = _get_block_text_specs(text, extract_ref=extract_ref)
 
+    if not blocks:
+        return "", ""
+
     try:
-        fs_normal_text = mode([fs for i, fs in enumerate(specs['fontsize'])
-                               if specs['page'][i] <= max(specs['page']) // 2])
+        fs_vals = specs.get("fontsize", [])
+        if not fs_vals or len(set(fs_vals)) > 1000:
+            logger.warning(
+                "Unrealistic font size distribution — skipping mode calculation")
+            fs_normal_text = 0
+        else:
+            fs_normal_text = mode([fs for i, fs in enumerate(specs['fontsize'])
+                                   if specs['page'][i] <= max(specs['page']) // 2])
     except Exception:
+        logger.warning("There's been an issue during font size calculation")
         if len(specs['fontsize_ref']) > 5:
             fs_normal_text = mode(specs['fontsize'])
         else:
@@ -862,11 +919,16 @@ def get_clean_block_text(text: str,
 
 def clean_full_text(pdf, extract_ref):
     try:
-        pdf["main_text"], pdf["ref_text"] = get_clean_block_text(
-            pdf["full_text"], extract_ref)
+        full_text = pdf.get("full_text", "")
+        if not isinstance(full_text, str) or len(full_text) > 1_000_000 or len(full_text) < 500:
+            logger.warning("Skipping overly long or malformed full_text")
+            pdf["main_text"], pdf["ref_text"] = "", ""
+        else:
+            pdf["main_text"], pdf["ref_text"] = get_clean_block_text(
+                full_text, extract_ref)
     except Exception as e:
-        logger.warning(
-            f"There's been an issue cleaning text: {pdf[:100]}: {e}")
+        logger.warning(f"Issue cleaning PDF {pdf.get('paperId', '?')}: {e}")
+        pdf["main_text"], pdf["ref_text"] = "", ""
     return pdf
 
 
@@ -882,24 +944,65 @@ def batch_full_Clean(extracted_dir: str,
             new_ids = collect_extracted_ids(extracted_dir)
             if not new_ids:
                 if extraction_year_done(extracted_dir):
+                    logger.warning("EXTRACTION DONE SIGNAL DETECTED")
                     break
                 else:
+                    logger.warning(
+                        "Waiting: no new files yet, extract not done")
                     time.sleep(5)
                     continue
 
-            extracted_pdfs = collect_extracted_PDFs(extracted_dir, new_ids)
+            batch_size = 64
+            extracted_pdfs = collect_extracted_PDFs(
+                extracted_dir, new_ids, batch_size=batch_size)
         except Exception:
             logger.exception("Cleanup failed during pdf collection")
             raise
 
-        try:
-            clean_pool = multiprocessing.Pool(processes=n_jobs)
-            clean_async = [clean_pool.apply_async(clean_full_text, (pdf, extract_ref))
-                           for pdf in extracted_pdfs]
-            final_results = [task.get() for task in clean_async]
-        except:
-            logger.exception("Cleanup failed during task completion")
-            raise
+        logger.info("Still running clean loop…")
+        Npapers = len(extracted_pdfs)
+        tqdm = get_tqdm()
+        with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
+                  desc=f"Cleaning {Npapers} new papers") as pbar:
+            try:
+                for i in pbar:
+                    batch_pdfs = extracted_pdfs[i*batch_size: (i+1)*batch_size]
+                    with multiprocessing.Pool(processes=n_jobs) as clean_pool:
+                        clean_async = [clean_pool.apply_async(clean_full_text, (pdf, extract_ref))
+                                       for pdf in batch_pdfs]
+
+                        pending = set(clean_async)
+                        final_results = []
+
+                        batch_timeout = 60 * \
+                            math.ceil(len(batch_pdfs) / n_jobs)
+                        end_time = time.time() + batch_timeout
+
+                        while pending:
+                            if time.time() > end_time:
+                                logger.warning(
+                                    f"{len(pending)} out of {len(batch_pdfs)} cleaning tasks timed out. Terminating pool.")
+                                clean_pool.terminate()
+                                clean_pool.join()
+                                break
+
+                            for task in list(pending):
+                                if task.ready():
+                                    try:
+                                        result = task.get()
+                                        final_results.append(result)
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"Cleaning task failed: {e}")
+                                    pending.remove(task)
+
+                            pbar.set_postfix(
+                                {"cleaning tasks": f"{len(pending)} left"})
+
+                            time.sleep(1)
+            except Exception as e:
+                pbar.close()
+                raise e
 
         if final_results:
             try:

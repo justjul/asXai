@@ -24,7 +24,7 @@ download:
 
 pdf:
   n_jobs_download: 20
-  n_jobs_extract: 40
+  n_jobs_extract: 20
   timeout_per_article: 15
   run_headless: True
   max_pages_start: 20
