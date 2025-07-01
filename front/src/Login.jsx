@@ -104,47 +104,26 @@ export default function Login() {
           required
           style={inputStyle}
         />
-        <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
-          <a
-            href="#"
-            onClick={async (e) => {
-              e.preventDefault();
-              if (!email) {
-                alert("Please enter your email above first.");
-                return;
-              }
-              try {
-                await resetPassword(email);
-                alert(`Password reset link sent to ${email}`);
-              } catch (err) {
-                console.error("Reset failed", err);
-                alert("Could not send password reset. Double-check the email.");
-              }
-            }}
-            style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
-          >
-            {isValidEmail(email) && (
-              <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
-                <a
-                  href="#"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    try {
-                      await resetPassword(email);
-                      alert(`Password reset link sent to ${email}`);
-                    } catch (err) {
-                      console.error("Reset failed", err);
-                      alert("Could not send password reset. Double-check the email.");
-                    }
-                  }}
-                  style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
-                >
-                  Forgot password?
-                </a>
-              </p>
-            )}
-          </a>
-        </p>
+        {isValidEmail(email) && (
+          <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
+            <a
+              href="#"
+              onClick={async (e) => {
+                e.preventDefault();
+                try {
+                  await resetPassword(email);
+                  alert(`Password reset link sent to ${email}`);
+                } catch (err) {
+                  console.error("Reset failed", err);
+                  alert("Could not send password reset. Double-check the email.");
+                }
+              }}
+              style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
+            >
+              Forgot password?
+            </a>
+          </p>
+        )}
         <button type="submit" style={loginBtnStyle}>Login</button>
         <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
           <span>
