@@ -49,10 +49,10 @@ class QdrantManager:
 
         self.collection_name_chunks = self.collection_name + '_chunks'
         self.collection_name_ids = self.collection_name + '_ids'
-        self.chunk_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
+        self.chunk_fields = {'paperId', 'fieldsOfStudy', 'venue', 'venue_lower', 'authorName',
                              'citationCount', 'influentialCitationCount',
                              'publicationDate', 'publicationYear', 'text', 'doi'}
-        self.id_fields = {'paperId', 'fieldsOfStudy', 'venue', 'authorName',
+        self.id_fields = {'paperId', 'fieldsOfStudy', 'venue', 'venue_lower', 'authorName',
                           'citationCount', 'influentialCitationCount',
                           'publicationDate', 'publicationYear', 'openAccessPdf',
                           'title', 'abstract', 'main_text', 'doi'}
@@ -403,7 +403,8 @@ def build_qdrant_filter(payload_filter: Optional[List[Tuple]] = None):
     conditions = {'must': []}
 
     if payload_filter:
-        matchany_fields = ['paperIdQ', 'paperId', 'venue', 'fieldsOfStudy']
+        matchany_fields = ['paperIdQ', 'paperId',
+                           'venue', 'venue_lower', 'fieldsOfStudy']
         matchtext_fields = ['abstract', 'main_text', 'title', 'authorName']
         matchrange_fields = ['publicationYear',
                              'citationCount', 'influentialCitationCount']

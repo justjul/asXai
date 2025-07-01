@@ -181,6 +181,7 @@ def s2_to_dataframe(dataset_list: dict) -> pd.DataFrame:
     papers = papers.drop_duplicates(subset='title')
     # Keep only plausible venues
     papers = papers[papers['venue'].str.len() > 3]
+    papers["venue_lower"] = papers['venue'].astype(str).str.lower()
 
     # Convert list fields to comma-separated strings
     papers['authorId'] = papers['authorId'].apply(
@@ -197,7 +198,7 @@ def s2_to_dataframe(dataset_list: dict) -> pd.DataFrame:
 
     papers = papers.drop(columns='name')
 
-    papers = papers[['paperId', 'title', 'abstract', 'venue', 'citationCount',
+    papers = papers[['paperId', 'title', 'abstract', 'venue', 'venue_lower', 'citationCount',
                      'fieldsOfStudy', 'publicationDate', 'authorId', 'authorName']]
     return papers
 
@@ -545,6 +546,7 @@ def arX_to_dataframe(arX_data: pd.DataFrame) -> pd.DataFrame:
     arX_norm['authorName'] = arX_norm['authorName'].str.replace(
         r'\s+and\s+', ', ', regex=True)
     arX_norm["venue"] = 'arXiv.org'
+    arX_norm["venue_lower"] = 'arxiv.org'
     arX_norm["authorId"] = None
     arX_norm["citationCount"] = None
     arX_norm["influentialCitationCount"] = None
