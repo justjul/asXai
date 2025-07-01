@@ -277,7 +277,8 @@ chat:
             - Only use information found in the provided documents or widely accepted scientific knowledge.
             - Cite your sources by including where appropriate [<ID>] where ID are the hashed article ID provided for each article.\n
             - Avoid fabricating article IDs.
-            - If you are unsure, state that more research may be needed.
+            
+            If **no articles** are provided in the context, do **not** cite any articles and simply emphasize that no articles related to this query were found in the database.
 
             Answer directly to the user, using the same language as the user's.
             Here is the user's query:\n
