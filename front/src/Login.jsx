@@ -21,7 +21,7 @@ export async function authFetch(currentUser, url, options = {}) {
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const { loading, signIn } = useAuth();
+  const { loading, signIn, resetPassword } = useAuth();
   const navigate = useNavigate();
 
   const writeIdTokenCookie = async () => {
@@ -65,6 +65,10 @@ export default function Login() {
     }
   };
 
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+
 
   // While AuthProvider is initializing, show nothing (or a loader)
   if (loading) return null;
@@ -100,6 +104,47 @@ export default function Login() {
           required
           style={inputStyle}
         />
+        <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
+          <a
+            href="#"
+            onClick={async (e) => {
+              e.preventDefault();
+              if (!email) {
+                alert("Please enter your email above first.");
+                return;
+              }
+              try {
+                await resetPassword(email);
+                alert(`Password reset link sent to ${email}`);
+              } catch (err) {
+                console.error("Reset failed", err);
+                alert("Could not send password reset. Double-check the email.");
+              }
+            }}
+            style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
+          >
+            {isValidEmail(email) && (
+              <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
+                <a
+                  href="#"
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    try {
+                      await resetPassword(email);
+                      alert(`Password reset link sent to ${email}`);
+                    } catch (err) {
+                      console.error("Reset failed", err);
+                      alert("Could not send password reset. Double-check the email.");
+                    }
+                  }}
+                  style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
+                >
+                  Forgot password?
+                </a>
+              </p>
+            )}
+          </a>
+        </p>
         <button type="submit" style={loginBtnStyle}>Login</button>
         <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
           <span>

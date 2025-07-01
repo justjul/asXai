@@ -5,7 +5,8 @@ import {
   createUserWithEmailAndPassword as firebaseSignUp,
   onAuthStateChanged,
   signOut as firebaseSignOut,
-  sendEmailVerification  
+  sendEmailVerification,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { createContext, useContext, useEffect, useState } from 'react';
 
@@ -52,8 +53,16 @@ export function AuthProvider({ children }) {
   // sign out
   const logout = () => firebaseSignOut(auth);
 
+  // reset password
+  const resetPassword = async (email) => {
+    return await sendPasswordResetEmail(auth, email, {
+      url: 'https://www.asxai.org',
+      handleCodeInApp: false
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signUp, signIn, logout }}>
+    <AuthContext.Provider value={{ user, loading, signUp, signIn, logout, resetPassword }}>
       {children}
     </AuthContext.Provider>
   );
