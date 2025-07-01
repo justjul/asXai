@@ -104,8 +104,21 @@ export default function Login() {
           required
           style={inputStyle}
         />
+        <button type="submit" style={loginBtnStyle}>Login</button>
+        <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
+          <span>
+            New here?{' '}
+            <a
+              href="#"
+              onClick={e => { e.preventDefault(); navigate('/signup'); }}
+              style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
+            >
+              Sign Up
+            </a>
+          </span>
+        </div>
         {isValidEmail(email) && (
-          <p style={{ fontSize: '0.85rem', textAlign: 'right' }}>
+          <p style={{ fontSize: '0.85rem', textAlign: 'center', margin: "0.0rem" }}>
             <a
               href="#"
               onClick={async (e) => {
@@ -124,19 +137,6 @@ export default function Login() {
             </a>
           </p>
         )}
-        <button type="submit" style={loginBtnStyle}>Login</button>
-        <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
-          <span>
-            New here?{' '}
-            <a
-              href="#"
-              onClick={e => { e.preventDefault(); navigate('/signup'); }}
-              style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}
-            >
-              Sign Up
-            </a>
-          </span>
-        </div>
       </form>
     </div>
   );
