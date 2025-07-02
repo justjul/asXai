@@ -68,7 +68,9 @@ def parse_mcp_response(text: str) -> Dict[str, Any]:
         start = text.index('{')
         end = text.rindex('}') + 1
         json_block = text[start:end]
-        json_block = json_block.replace("None", "null")
+        json_block = json_block.replace("None", "null")  \
+            .replace("True", "true") \
+            .replace("False", "false")
         return json.loads(json_block)
     except (ValueError, json.JSONDecodeError) as e:
         logger.warning(f"JSON decoding error  in MCP response {text}: {e}")

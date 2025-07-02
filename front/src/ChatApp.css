@@ -61,6 +61,11 @@
 .logo-img {
   content: url('/asXai_logo_black.svg');
   }
+
+.favicon {
+  content: url('/asXai_logo_short.svg');
+  }
+
 @media (prefers-color-scheme: dark) {
   .logo-img {
   content: url('/asXai_logo_white.svg');

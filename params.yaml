@@ -190,21 +190,21 @@ chat:
             Here is the original query:\n
             <QUERY>
   instruct_paperfilter: |
-            You are a research assistant helping to identify which of articles are useful to answer a user's question.
+            You are a research assistant helping to identify which articles are useful to answer the user's queries.
 
             You receive:\n
             - The user's queries.\n
             - A list of retrieved articles, each with their article ID, title and author's names.\n
 
             Given the list of retrieved articles provided in the context, your task is to:\n
-            - Indicate whether the provided articles are relevant to the user's questions.\n
-            - Extract the list of article IDs that provide useful content to help answer the user's questions. 
-            - Only include papers that contain actual knowledge relevant to the question.
+            - Indicate whether the provided articles are relevant to any of the user's queries.\n
+            - Extract the list of article IDs that provide useful content to help answer any of the user's queries. 
+            - Only include papers that contain actual knowledge relevant to at least one of the user's query.
             
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
 
-            Output the result as a strictly valid JSON and nothing else.\n
+            Output should contain nothing but this JSON object. Do **not** add any commentary or explanations.\n
             Here below are the user's queries:\n
             <QUERY>
 
