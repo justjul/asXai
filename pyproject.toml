@@ -13,6 +13,8 @@ dependencies = [
     "confluent-kafka",
     "ollama",
     "groq",
+    "anthropic",
+    "openai",
 
     "pyarrow",
     "python-dotenv",

@@ -581,9 +581,8 @@ async def chat_process(payload, inference_manager):
                 instruct=instruct_writer,
                 stream=True,  # False,  # True,
                 model=model_name,
-                temperature=0.5,
+                top_p=0.1,
             )
-
             task_writers.append(asyncio.create_task(
                 inference_manager.stream_to_queue(writer_streamer, queue)))
 
@@ -617,7 +616,7 @@ async def chat_process(payload, inference_manager):
                     instruct=chat_config['instruct_contentEditor'],
                     stream=False,  # False,  # True,
                     model=model_name,
-                    temperature=0.5,
+                    top_p=0.1,
                 )
                 task_editors.append(asyncio.create_task(
                     inference_manager.response_to_queue(content_editor, queue)))
@@ -642,12 +641,16 @@ async def chat_process(payload, inference_manager):
             chat_manager.stream("\n<REVISING>\n")
 
             if not chat_manager.mode in ["update"]:
+                context = [msg for msg in context if msg['model']
+                           != 'search-worker']
+                context += [{'role': 'user', 'content': full_query}]
                 final_version = await inference_manager.writer(
                     content=full_response,
+                    context=context,
                     instruct=chat_config['instruct_styleEditor'],
                     stream=False,  # False,  # True,
                     model=model_name,
-                    temperature=0.5,
+                    top_p=0.1,
                 )
                 full_response = final_version['content']
                 chat_manager.stream("\n<CLEAR>\n")
@@ -691,6 +694,16 @@ async def worker_loop(inference_manager):
     while True:
         payload = await message_queue.get()
         task_id = payload['task_id']
+
+        # if a task is already running for that notebook
+        # we recycle it until it's done
+        if task_id in task_registry:
+            logger.info("Notebook processing a previous query")
+            await asyncio.sleep(0.2)
+            await message_queue.put(payload)
+            logger.info("Latest query recycled to waiting queue")
+            continue
+
         task = asyncio.create_task(chat_process(payload, inference_manager))
         task_registry[task_id] = task
         task.add_done_callback(lambda t: task_registry.pop(task_id, None))

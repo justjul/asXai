@@ -18,6 +18,13 @@ import asyncio
 
 from ollama import AsyncClient
 from groq import AsyncGroq
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+
+import anthropic
+import ollama
+import groq
+import openai
 
 import requests
 
@@ -93,6 +100,16 @@ class InferenceManager:
             timeout=client_timeout,
             max_retries=5
         )
+        self.client_anthropic = AsyncAnthropic(
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            timeout=client_timeout,
+            max_retries=5
+        )
+        self.client_openai = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            timeout=client_timeout,
+            max_retries=5
+        )
 
         # Limit concurrent calls
         self.semaphore = asyncio.Semaphore(self.max_threads)
@@ -102,7 +119,6 @@ class InferenceManager:
         Polls the Ollama HTTP endpoint until it responds 200 or timeout.
         Logs status and errors.
         """
-        ready = False
         url = f"http://{self.ollama_host}:{self.ollama_port}"
         endtime = time.time() + self.client_timeout
         n_retry = 0
@@ -113,7 +129,6 @@ class InferenceManager:
                 if response.status_code == 200:
                     if n_retry > 0:
                         logger.info("Ollama service is up and running.")
-                    ready = True
                     return
             except requests.exceptions.RequestException:
                 pass
@@ -152,7 +167,8 @@ class InferenceManager:
         Validates against configured model list.
         """
         model_name = self.model_name if override == "default" else override
-        if model_name not in llm_config.get("model_list", []):
+        if (model_name not in llm_config.get("model_list", [])
+                and model_name not in llm_config.get("model_list_dev", [])):
             model_name = self.model_name
         [provider, model_id] = model_name.split('/', 1)
         return (provider, model_id)
@@ -170,10 +186,20 @@ class InferenceManager:
         inside_think = False
 
         async for chunk in streamer:
-            if hasattr(chunk, "message"):
-                token = chunk["message"]["content"]
-            elif hasattr(chunk, "choices"):
-                token = chunk.choices[0].delta.content or ""
+            token = ""
+            if isinstance(streamer, groq.AsyncStream):
+                if hasattr(chunk, "choices"):
+                    token = chunk.choices[0].delta.content or ""
+            elif isinstance(streamer, anthropic.AsyncStream):
+                if hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                    token = chunk.delta.text or ""
+            elif isinstance(streamer, openai.AsyncStream):
+                if hasattr(chunk, "choices"):
+                    token = chunk.choices[0].delta.content or ""
+            elif hasattr(chunk, "message"):  # ollama
+                token = chunk["message"]["content"] or ""
+            else:
+                print(chunk)
 
             # Handle <think> markers
             if "<think>" in token:
@@ -216,10 +242,20 @@ class InferenceManager:
         buffer, think_buffer = "", ""
         inside_think = False
         async for chunk in streamer:
-            if hasattr(chunk, "message"):
-                token = chunk["message"]["content"]
-            elif hasattr(chunk, "choices"):
-                token = chunk.choices[0].delta.content or ""
+            token = ""
+            if isinstance(streamer, groq.AsyncStream):
+                if hasattr(chunk, "choices"):
+                    token = chunk.choices[0].delta.content or ""
+            elif isinstance(streamer, anthropic.AsyncStream):
+                if hasattr(chunk, "delta") and hasattr(chunk.delta, "text"):
+                    token = chunk.delta.text or ""
+            elif isinstance(streamer, openai.AsyncStream):
+                if hasattr(chunk, "choices"):
+                    token = chunk.choices[0].delta.content or ""
+            elif hasattr(chunk, "message"):  # ollama
+                token = chunk["message"]["content"] or ""
+            else:
+                print(chunk)
 
             if "<think>" in token:
                 inside_think = True
@@ -265,7 +301,7 @@ class InferenceManager:
         **kwargs
     ) -> Union[str, AsyncGenerator]:
         """
-        High-level chat call. Supports Ollama or Groq providers, streaming or not.
+        High-level chat call. Supports Ollama, Groq or Anthropic providers, streaming or not.
 
         Args:
             messages: List[{"role": "...", "content": "..."}]
@@ -310,7 +346,52 @@ class InferenceManager:
                         stream=False,
                         **kwargs
                     )
-                    return response.choices[0].message.content
+                    return ''.join([block.message.content for block in response.choices])
+        if provider.lower() == "anthropic":
+            options = kwargs
+            async with self.semaphore:
+                if stream:
+                    streamer = await self.client_anthropic.messages.create(
+                        max_tokens=2048,
+                        model=model_name,
+                        messages=messages,
+                        stream=True,
+                        **kwargs
+                    )
+                    return streamer
+                else:
+                    response = await self.client_anthropic.messages.create(
+                        max_tokens=2048,
+                        model=model_name,
+                        messages=messages,
+                        stream=False,
+                        **kwargs
+                    )
+                    return ''.join([block.text for block in response.content])
+        if provider.lower() == "openai":
+            if model_name.startswith('o'):
+                for k in ['temperature', 'top_p', 'top_k']:
+                    kwargs.pop(k, None)
+                kwargs['reasoning_effort'] = "medium"
+            async with self.semaphore:
+                if stream:
+                    streamer = await self.client_openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        stream=True,
+                        seed=42,
+                        **kwargs
+                    )
+                    return streamer
+                else:
+                    response = await self.client_openai.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        stream=False,
+                        seed=42,
+                        **kwargs
+                    )
+                    return ''.join([block.message.content for block in response.choices])
 
     # ----- Specialized MCP-based methods -----
 
@@ -413,7 +494,8 @@ class InferenceManager:
         messages = [{'role': 'user', 'content': prompt}]
 
         temperature = kwargs.pop('temperature', 0.0)
-        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
+        top_p = kwargs.pop('top_p', 0.1)
+        response = await self.generate(messages=messages, temperature=temperature, top_p=top_p, **kwargs)
         res = parse_model_response(response)
 
         return res['content']
@@ -450,7 +532,9 @@ class InferenceManager:
         messages = context + [{'role': 'user', 'content': prompt}]
 
         # Call LLM to expand query
-        response = await self.generate(messages=messages, **kwargs)
+        temperature = kwargs.pop('temperature', 0.0)
+        top_p = kwargs.pop('top_p', 0.1)
+        response = await self.generate(messages=messages, temperature=temperature, top_p=top_p, **kwargs)
         result = ExpandQueryMCP.parse(response)
         logger.info(f"Expand results: {result}")
 
@@ -466,8 +550,8 @@ class InferenceManager:
 
         # derive keywords and parse structure if question is valid
         if scientific and ethical:
-            payload = await self.keywords(query=query_to_parse, **kwargs)
-            parsed = await self.parse(query_to_parse, **kwargs)
+            payload = await self.keywords(query=query_to_parse, temperature=temperature, top_p=top_p, **kwargs)
+            parsed = await self.parse(query_to_parse, temperature=temperature, top_p=top_p, **kwargs)
         else:
             payload, parsed = {}, {}
 
@@ -561,7 +645,8 @@ class InferenceManager:
         messages = [{'role': 'user', 'content': prompt}]
 
         temperature = kwargs.pop('temperature', 0.0)
-        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
+        top_p = kwargs.pop('top_p', 0.1)
+        response = await self.generate(messages=messages, temperature=temperature, top_p=top_p, **kwargs)
         result = QueryParseMCP.parse(response)
 
         return result
@@ -596,7 +681,8 @@ class InferenceManager:
         messages.extend([{'role': 'user', 'content': prompt}])
 
         temperature = kwargs.pop('temperature', 0.0)
-        response = await self.generate(messages=messages, temperature=temperature, **kwargs)
+        top_p = kwargs.pop('top_p', 0.1)
+        response = await self.generate(messages=messages, temperature=temperature, top_p=top_p, **kwargs)
         results = RelevantPaperMCP.parse(response)
         logger.info(f"Article filter response after parsing: {results}")
         return results

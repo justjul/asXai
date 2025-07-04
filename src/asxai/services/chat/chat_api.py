@@ -720,7 +720,10 @@ def generate_task_id(decoded_token: dict = Depends(verify_token)):
 @app.get("/notebook/models")
 async def get_model_list(decoded_token: dict = Depends(verify_token)):
     user_id = safe_user_id(decoded_token["uid"])
-    return JSONResponse(content={"model_list": llm_config["model_list"]})
+    if not decoded_token.get("admin"):
+        return JSONResponse(content={"model_list": llm_config["model_list"]})
+    else:
+        return JSONResponse(content={"model_list": llm_config["model_list_dev"]})
 
 
 @app.get("/admin/delete_ghost_users")

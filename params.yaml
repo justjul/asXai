@@ -96,6 +96,43 @@ llm:
     - ollama/mistral-small:24b
     - ollama/deepseek-r1:32b
     - ollama/deepseek-r1:14b
+    - anthropic/claude-3-7-sonnet-20250219
+    - anthropic/claude-3-5-haiku-20241022
+    - openai/o4-mini-2025-04-16
+    - openai/o3-mini-2025-01-31
+    - openai/gpt-4.1-mini-2025-04-14
+    - openai/gpt-4o-mini-2024-07-18
+  model_list_dev:
+    - groq/meta-llama/llama-4-scout-17b-16e-instruct
+    - groq/compound-beta
+    - groq/gemma2-9b-it
+    - groq/llama3-70b-versatile
+    - groq/llama3-70b-8192
+    - groq/llama3-8b-8192
+    - groq/meta-llama/llama-4-maverick-17b-128e-instruct
+    - groq/deepseek-r1-distill-llama-70b
+    - groq/llama-3.1-8b-instant
+    - groq/llama-3.3-70b-versatile
+    - groq/mistral-saba-24b
+    - groq/qwen-qwq-32b
+    - ollama/gemma3:12b
+    - ollama/gemma2:27b
+    - ollama/mistral-small:24b
+    - ollama/deepseek-r1:32b
+    - ollama/deepseek-r1:14b
+    - anthropic/claude-opus-4-20250514
+    - anthropic/claude-sonnet-4-20250514
+    - anthropic/claude-3-7-sonnet-20250219
+    - anthropic/claude-3-5-haiku-20241022
+    - openai/gpt-4.5-preview-2025-02-27
+    - openai/o1-2024-12-17
+    - openai/o3-2025-04-16
+    - openai/o4-mini-2025-04-16
+    - openai/o3-mini-2025-01-31
+    - openai/gpt-4.1-2025-04-14
+    - openai/gpt-4.1-mini-2025-04-14
+    - openai/gpt-4o-mini-2024-07-18
+    - openai/gpt-4o-2024-08-06
   ollama_port: 11434
   ollama_host: localhost
   client_timeout: 120.0
@@ -124,7 +161,7 @@ chat:
   hash_len: 20
   allowed_origins:
     - http://localhost:5173
-    - https://goose-beloved-kit.ngrok-free.app
+    - https://www.asxai.org
     - https://api.asxai.org
 
   min_history_length: 1000
@@ -172,7 +209,7 @@ chat:
             Format your output as a JSON object with the following fields:\n
             <FIELDS>\n\n
 
-            Output the result as a strictly valid JSON and nothing else.\n
+            Output should contain nothing but this JSON object. Do **not** add any commentary or explanations.\n
             Here is the original query:\n
             <QUERY>
   instruct_keyword: |
@@ -277,6 +314,7 @@ chat:
             - Only use information found in the provided documents or widely accepted scientific knowledge.
             - Cite your sources by including where appropriate [<ID>] where ID are the hashed article ID provided for each article.\n
             - Avoid fabricating article IDs.
+            - Do **not** insert titles or headers.
             
             If **no articles** are provided in the context, do **not** cite any articles and simply emphasize that no articles related to this query were found in the database.
 
@@ -316,14 +354,17 @@ chat:
 
   instruct_styleEditor: |
             You are a professional scientific editor.  
-            Your input is a multi‐section draft written by independent writers, with inline citations in the form [paperId].  
+            Your input is:
+            - a response draft with paragraphs or sections written by independent writers, with inline citations in the form [paperId].
+            - previous conversation messages
 
             Your job is to:
-            1. Rephrase the entire text into a smooth, clear, conccise and scientifically accurate narrative, in the same language as in the original draft.  
-            2. Eliminate any redundancy or repetition between sections—only keep in each sections ideas that are not present in previous sections.  
-            3. Preserve the original section structure and all inline citations exactly as they appear (e.g. [a7c12k30...]).  
-            4. Improve the abstract: make it scientifically precise, concise, and reflective of the full text.  
-            5. Do **not** add or remove any citations, and do **not** insert any commentary or headers or title—return only the revised text.
+            1. Rephrase the entire response into a smooth, clear, conccise and scientifically accurate narrative, in the same language as in the original draft.  
+            2. Eliminate any redundancy or repetition between paragraph/sections—only keep in each sections ideas that are not present in previous sections or previous messages in the conversation.  
+            3. Preserve the original section structure and all inline citations exactly as they appear (e.g. [a7c12k30...]).
+            4. Keep section headers if present in the original draft.
+            5. Improve the abstract: make it scientifically precise, concise, and reflective of the full text.  
+            6. Do **not** add or remove any citations, and do **not** insert any commentary—return only the revised text.
 
             ### Input
             <CONTENT>

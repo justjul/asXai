@@ -424,6 +424,12 @@ export default function ChatApp() {
       );
       if (!res.ok) throw new Error(`Backend returned ${res.status}`);
 
+      setStreamingNotebookIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      
       refreshMessages()
       setIsStreaming(false)
 
