@@ -257,7 +257,11 @@ class QdrantManager:
             time.sleep(5)
 
         if os.path.isdir(self.tmp_path) and self.clean_after_push:
-            os.removedirs(self.tmp_path)
+            try:
+                os.removedirs(self.tmp_path)
+            except Exception as e:
+                logger.warning(
+                    f"Unable to delete embedding folder; most likely not empty: {e}")
 
     async def update_payload(self,
                              new_payload: dict,):

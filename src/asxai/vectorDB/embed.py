@@ -142,6 +142,11 @@ def load_and_chunk(paperData: dict,
 
 def get_normalized_textdata(textdata):
     papertext = textdata.copy()
+    if 'main_text' not in papertext.columns:
+        papertext['main_text'] = ''
+    if 'ref_text' not in papertext.columns:
+        papertext['ref_text'] = ''
+
     papertext['main_text'] = papertext['main_text'].fillna('')
     papertext['main_text'] = papertext['main_text'].replace(to_replace='None',
                                                             value='')
@@ -296,76 +301,76 @@ class PaperEmbed:
         chunk_executor = ThreadPoolExecutor(max_workers=self.n_jobs)
 
         tqdm = get_tqdm()
-        # with tqdm(range(0, len(papers), self.paper_batch_size),
-        #           desc=f"Embedding {len(papers)} papers", position=0, colour='#000000') as pbar:
-        # for i in pbar:
-        paperBatch = papers  # [i:i+self.paper_batch_size]
-        doc_prefix = self._model_prefix(tokenized=True)
-        tasks = [chunk_executor.submit(
-            load_and_chunk, paper, self.chunk_tokenizer,
-            self.chunk_size, self.max_chunks, len(doc_prefix)) for paper in paperBatch]
-
-        batched_texts = []
-        batched_ids = []
-        batched_masks = []
-        batched_payloads = []
-        all_paper_ids = []
-        chunk_counts = []
-        n_papers = len(tasks)
-        with tqdm(enumerate(as_completed(tasks), 1), total=len(papers),
+        with tqdm(range(0, len(papers), self.paper_batch_size),
                   desc=f"Embedding {len(papers)} papers", position=0, colour='#000000') as pbar:
-            for k, future in pbar:
-                try:
-                    paper_id, texts, masks, payloads = future.result()
-                    if len(texts) > 1:
-                        batched_ids.extend([paper_id]*len(texts))
-                        batched_texts.extend(texts)
-                        batched_masks.extend(masks)
-                        batched_payloads.extend(payloads)
-                        all_paper_ids.append(paper_id)
-                        chunk_counts.append(len(texts))
-                except Exception as e:
-                    print("Failed to chunk")
-                    raise e
+            for i in pbar:
+                paperBatch = papers[i:i+self.paper_batch_size]
+                doc_prefix = self._model_prefix(tokenized=True)
+                tasks = [chunk_executor.submit(
+                    load_and_chunk, paper, self.chunk_tokenizer,
+                    self.chunk_size, self.max_chunks, len(doc_prefix)) for paper in paperBatch]
 
-                pbar.set_postfix(
-                    {'embedding': f"{n_papers - k + 1} papers left"})
-                if (len(all_paper_ids) >= self.chunk_batch_size // self.max_chunks
-                        or k == n_papers):
-                    sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
-                                              batched_ids), key=lambda x: len(x[0]))
-                    if sorted_batch:
-                        batched_texts, batched_masks, batched_payloads, batched_ids = list(
-                            zip(*sorted_batch))
+                batched_texts = []
+                batched_ids = []
+                batched_masks = []
+                batched_payloads = []
+                all_paper_ids = []
+                chunk_counts = []
+                n_papers = len(tasks)
 
-                        doc_prefix = self._model_prefix(tokenized=False)
-                        embeddings = self.compute_embeddings(texts=batched_texts,
-                                                             masks=batched_masks,
-                                                             prefix=doc_prefix)
+                for k, future in enumerate(as_completed(tasks), 1):
+                    try:
+                        paper_id, texts, masks, payloads = future.result()
+                        if len(texts) > 1:
+                            batched_ids.extend([paper_id]*len(texts))
+                            batched_texts.extend(texts)
+                            batched_masks.extend(masks)
+                            batched_payloads.extend(payloads)
+                            all_paper_ids.append(paper_id)
+                            chunk_counts.append(len(texts))
+                    except Exception as e:
+                        print("Failed to chunk")
+                        raise e
 
-                    for paper_id in all_paper_ids:
-                        all_embeddings = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
-                                                      if id == paper_id])
-                        mean_embedding = all_embeddings.mean(dim=0).tolist()
-                        embeded_data = {
-                            "embeddings": [
-                                emb.tolist() for id, emb in zip(batched_ids, embeddings)
-                                if id == paper_id],
-                            "payloads": [
-                                payload for id, payload in zip(batched_ids, batched_payloads)
-                                if id == paper_id],
-                            "mean_embedding": mean_embedding}
-                        if embeded_data["embeddings"]:
-                            save_executor.submit(
-                                save_embeddings, paper_id, embeded_data, self.cache_dir)
-                            # save_embeddings(paper_id, embeded_data, self.cache_dir)
+                    pbar.set_postfix(
+                        {'embedding': f"{n_papers - k + 1} papers left"})
+                    if (len(all_paper_ids) >= self.chunk_batch_size // self.max_chunks
+                            or k == n_papers):
+                        sorted_batch = sorted(zip(batched_texts, batched_masks, batched_payloads,
+                                                  batched_ids), key=lambda x: len(x[0]))
+                        if sorted_batch:
+                            batched_texts, batched_masks, batched_payloads, batched_ids = list(
+                                zip(*sorted_batch))
 
-                    batched_texts = []
-                    batched_ids = []
-                    batched_masks = []
-                    batched_payloads = []
-                    all_paper_ids = []
-                    chunk_counts = []
+                            doc_prefix = self._model_prefix(tokenized=False)
+                            embeddings = self.compute_embeddings(texts=batched_texts,
+                                                                 masks=batched_masks,
+                                                                 prefix=doc_prefix)
+
+                        for paper_id in all_paper_ids:
+                            all_embeddings = torch.stack([emb for id, emb in zip(batched_ids, embeddings)
+                                                          if id == paper_id])
+                            mean_embedding = all_embeddings.mean(
+                                dim=0).tolist()
+                            embeded_data = {
+                                "embeddings": [
+                                    emb.tolist() for id, emb in zip(batched_ids, embeddings)
+                                    if id == paper_id],
+                                "payloads": [
+                                    payload for id, payload in zip(batched_ids, batched_payloads)
+                                    if id == paper_id],
+                                "mean_embedding": mean_embedding}
+                            if embeded_data["embeddings"]:
+                                save_executor.submit(
+                                    save_embeddings, paper_id, embeded_data, self.cache_dir)
+                                # save_embeddings(paper_id, embeded_data, self.cache_dir)
+
+                        batched_texts = []
+                        batched_ids = []
+                        batched_masks = []
+                        batched_payloads = []
+                        all_paper_ids = []
+                        chunk_counts = []
 
         chunk_executor.shutdown(wait=True)
         save_executor.shutdown(wait=True)

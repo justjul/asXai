@@ -34,7 +34,7 @@ from asxai.pdf.download_PDF import download_PDFs
 
 from asxai.vectorDB.qdrant import QdrantManager
 from asxai.vectorDB.embed import PaperEmbed
-from asxai.dataIO.load import load_data, update_text
+from asxai.dataIO.load import load_data, update_text, update_status
 from asxai.pdf.extract_PDF import collect_extracted_batch
 
 import config
@@ -232,7 +232,7 @@ def update_qdrant_payloads(years: Union[int, List[int]] = None):
             logger.info(f"Updating payloads for year {year}")
             paperdata = load_data(subsets=year,
                                   data_types=["text", "metadata"],
-                                  filters=[('pdf_status', '==', 'extracted')]
+                                  filters=[('status', '==', 'extracted')]
                                   )
             metadata = paperdata['metadata'].to_dict(orient="records")
             await manager.batch_update_payloads(metadata)
@@ -385,6 +385,7 @@ def process(
                                timeout_loadpage=timeout_loadpage, timeout_startdw=timeout_startdw,
                                save_pdfs_to=save_pdfs_to, timeout_per_article=timeout_per_article,
                                max_pages=max_pages, keep_pdfs=keep_pdfs)
+        update_status(status={'extracted': 'pdf_pushed'}, subsets=years)
 
     if download_extract and not embed_push:
         download_and_extract(years=years, filters=filters, n_jobs=n_jobs,
@@ -394,3 +395,8 @@ def process(
 
     if embed_push and not download_extract:
         embed_and_push(years=years, filters=filters)
+        update_status(
+            status={'extracted': 'pdf_pushed',
+                    'None': 'abstract_pushed'},
+            subsets=years
+        )

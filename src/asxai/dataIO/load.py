@@ -258,3 +258,52 @@ def update_text(newtxtdata, subset):
     filepath = config.TEXTDATA_PATH / str(subset) / filename
     txtdata.to_parquet(filepath, engine="pyarrow",
                        compression="snappy", index=True)
+
+
+def update_status(
+        status: Union[str, dict],
+        subsets: Union[int, str, List[str], List[int]] = None,
+        paperIds: List[str] = None,
+):
+    """
+    Update status with value `status` for papers matching paperIds for a given subset.
+
+    Args:
+        subsets: One or more subset identifiers (years) to load. If None, auto-detects by listing directories.
+        paperIds: List of paper Ids
+        status: value of the article status (e.g. extracted, pushed, ...)
+
+    Behavior:
+        - Loads existing text data for subset.
+        - Update status column for papers with Ids matching paperIds.
+        - Writes updated DataFrame back to parquet.
+    """
+    # Normalize subset list
+    if subsets is None:
+        # Auto-detect subset directories that look like years
+        subsets = [year for year in os.listdir(
+            config.METADATA_PATH) if year.isdigit() and len(year) == 4]
+    elif isinstance(subsets, int) or isinstance(subsets, str):
+        subsets = [str(subsets)]
+    else:
+        subsets = [str(subset) for subset in subsets]
+
+    for subset in subsets:
+        # Load existing text data
+        txtdata = load_data(subset, data_types=['text'])
+        txtdata = txtdata["text"]
+
+        # Update status
+        if isinstance(status, dict):
+            txtdata['status'] = txtdata['status'].replace(status)
+        elif isinstance(status, str):
+            if not paperIds:
+                paperIds = txtdata['paperId']
+            txtdata.loc[txtdata['paperId'].isin(
+                paperIds), 'status'] = status
+
+        # Write back
+        filename = f"text_{str(subset)}.parquet"
+        filepath = config.TEXTDATA_PATH / str(subset) / filename
+        txtdata.to_parquet(filepath, engine="pyarrow",
+                           compression="snappy", index=True)

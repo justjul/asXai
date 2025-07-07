@@ -1,4 +1,5 @@
-from asxai.dataset import update, process, update_payloads, arXlinks_update
+from asxai.dataset import update, process, update_payloads
+from asxai.dataset.download import arX_update
 from asxai.vectorDB import RerankEncoder
 from datetime import datetime
 
@@ -21,14 +22,20 @@ def update_database(mode: str = 'update',
                     only_new: bool = False):
     """
     Args:
-        mode: "update", "push", "pull", or "nothing".
+        mode: "update", "push", "pull", "arXiv" or "nothing".
         years: A single year or a list of years to update.
         min_citations_per_year: Minimum citation threshold.
         fields_of_study: List of fields to include.
         update_reranker: Whether to retrain the reranker model.
     """
 
-    filters = [('pdf_status', '!=', 'extracted')] if only_new else None
+    db_filter = []
+    if only_new:
+        db_filter = [('status', '==', 'None')]
+    else:
+        db_filter = [('status', '!=', 'pdf_pushed')]
+    openAccess_filter = [
+        ('status', '!=', 'pdf_pushed')] + [('isOpenAccess', '==', True)]
 
     if mode == "update":
         logger.info(f"Starting update for year {years}")
@@ -36,28 +43,37 @@ def update_database(mode: str = 'update',
                min_citations_per_year=min_citations_per_year,
                fields_of_study=fields_of_study)
 
-        # Will later include updates from arXiv but we'll then need
-        # to define a way to clean up the database from old arXiv
-        # papers that never got cited. The problem is that papers
-        # that are not in s2 don't have citation counts for now...
-
         logger.info(
-            f"Will now extract, embed and push new articles of {years}")
+            f"Will now download and extract new openAccess articles of {years}")
         process(years=years,
                 download_extract=True,
                 embed_push=True,
-                filters=filters)
+                filters=openAccess_filter)
+
+        logger.info(
+            f"Will now embed and push all other new articles of {years}")
+        process(years=years,
+                download_extract=False,
+                embed_push=True,
+                filters=db_filter)
 
         logger.info(f"Updating all payloads for year {years}")
         update_payloads(years=years)
 
     elif mode == "push":
-        logger.info(f"Pushing all articles for year {years}")
-
+        logger.info(
+            f"Will now download and extract new openAccess articles of {years}")
         process(years=years,
                 download_extract=True,
                 embed_push=True,
-                filters=filters)
+                filters=openAccess_filter)
+
+        logger.info(
+            f"Will now embed and push all other new articles of {years}")
+        process(years=years,
+                download_extract=False,
+                embed_push=True,
+                filters=db_filter)
 
     elif mode == "pull":
         logger.info(f"Fetching articles for year {years}")
@@ -67,7 +83,15 @@ def update_database(mode: str = 'update',
                fields_of_study=fields_of_study)
 
         logger.info(f"Updating all payloads for year {years}")
-        update_payloads(years=years)
+        # update_payloads(years=years)
+
+    elif mode == "arXiv":
+        logger.info(f"Fetching arXiv articles for year {years}")
+
+        arX_update(years=years)
+
+        # logger.info(f"Updating all payloads for year {years}")
+        # update_payloads(years=years)
 
     else:
         logger.warning(f"Unsupported mode: {mode}")

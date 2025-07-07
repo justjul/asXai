@@ -175,6 +175,9 @@ class PDFdownloader:
 
             self.queue.append(paperInfo["paperId"])
 
+            if self.driver is None:
+                self.driver = self._s2_init_driver(self.headless)
+
             # Set Chrome's download directory dynamically
             self.driver.execute_cdp_cmd(
                 "Page.setDownloadBehavior",
@@ -221,9 +224,10 @@ class PDFdownloader:
                         time.sleep(0.2)
 
         except Exception as e:
+            logger.warning(f"Unexpected error: {e}")
             download_status = "broken link?"
 
-        paperInfo["pdf_status"] = download_status
+        paperInfo["status"] = download_status
 
         return paperInfo
 
@@ -283,9 +287,10 @@ class PDFdownloader:
                 continue
             except Exception as e:
                 logger.warning(f"Unexpected error: {e}")
+                download_status = "broken link?"
                 break
 
-        paperInfo["pdf_status"] = download_status
+        paperInfo["status"] = download_status
 
         return paperInfo
 

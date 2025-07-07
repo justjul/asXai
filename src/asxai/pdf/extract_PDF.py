@@ -97,7 +97,7 @@ class PDFextractor:
                             paper_data.pop("valid_pages")
                             for key in pdf_data.keys():
                                 paper_data[key] = pdf_data[key]
-                            paper_data["pdf_status"] = "extracted"
+                            paper_data["status"] = "extracted"
 
                             dic_path = Path(self.extracted_dir,
                                             dirname["id"] + ".pkl")
