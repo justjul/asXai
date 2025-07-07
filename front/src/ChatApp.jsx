@@ -994,7 +994,7 @@ export default function ChatApp() {
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                  src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                  className={leftCollapsed ? "bookClosed-img" : "bookOpen-img"}
                   alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                   style={{
                     height: '1.7em', // or adjust as needed for your top bar
@@ -1042,7 +1042,7 @@ export default function ChatApp() {
                     title="New notebook"
                   >
                     <img
-                      src= "/book_add_icon.svg"
+                      className= "bookAdd-img"
                       alt= "New notebook"
                       style={{
                         height: '1.7em', // or adjust as needed for your top bar
@@ -1071,7 +1071,7 @@ export default function ChatApp() {
                     title="Update all Notebooks"
                   >
                     <img
-                      src= "/book_update_icon.svg"
+                      className= "bookUpdate-img"
                       alt= "Update all Notebooks"
                       style={{
                         height: '2em', // or adjust as needed for your top bar
@@ -1334,7 +1334,7 @@ export default function ChatApp() {
               title={leftCollapsed ? "Open notebooks sidebar" : "Collapse notebooks sidebar"}
             >
               <img
-                src={leftCollapsed ? "/book_closed_icon.svg" : "/book_open_icon.svg"}
+                className={leftCollapsed ? "bookClosed-img" : "bookOpen-img"}
                 alt={leftCollapsed ? "Open notebook icon" : "Closed notebook icon"}
                 style={{
                   height: '1.7em', // or adjust as needed for your top bar
@@ -1459,7 +1459,7 @@ export default function ChatApp() {
               title={lockArticleList ? "Unlock Article List" : "Lock Article List"}
             >
               <img
-                src={lockArticleList ? "/lock_closed_icon.svg" : "/lock_open_icon.svg"}
+                className={lockArticleList ? "lockClosed-img" : "lockOpen-img"}
                 alt={lockArticleList ? "Locked articles icon" : "Unlocked articles icon"}
                 style={{
                   height: '1.7em', // or adjust as needed for your top bar
@@ -1485,7 +1485,7 @@ export default function ChatApp() {
               title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
             >
               <img
-                src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
+                className={rightCollapsed ? "academiaClosed-img" : "academiaOpen-img"}
                 alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
                 style={{
                   height: '1.7em', // or adjust as needed for your top bar
@@ -2151,7 +2151,7 @@ export default function ChatApp() {
               title={rightCollapsed ? "Open papers sidebar" : "Collapse papers sidebar"}
             >
               <img
-                  src={rightCollapsed ? "/academia_closed_icon.svg" : "/academia_open_icon.svg"}
+                  className={rightCollapsed ? "academiaClosed-img" : "academiaOpen-img"}
                   alt={rightCollapsed ? "Open articles icon" : "Closed articles icon"}
                   style={{
                     height: '1.7em', // or adjust as needed for your top bar
@@ -2187,7 +2187,7 @@ export default function ChatApp() {
               }}
             >
               <img
-                  src={lockArticleList ? "/lock_closed_icon.svg" : "/lock_open_icon.svg"}
+                  className={lockArticleList ? "lockClosed-img" : "lockOpen-img"}
                   alt={lockArticleList ? "Article list locked" : "Article list unlocked"}
                   style={{
                     height: '2em', // or adjust as needed for your top bar
