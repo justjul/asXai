@@ -112,9 +112,8 @@ class InferenceManager:
             max_retries=5
         )
         self.client_mistral = Mistral(
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=os.getenv("MISTRAL_API_KEY"),
             timeout_ms=client_timeout * 1000,
-            max_retries=5
         )
 
         # Limit concurrent calls
@@ -324,6 +323,13 @@ class InferenceManager:
             kwargs.pop("model", "default"))
         stream = kwargs.pop("stream", False)
 
+        temperature = kwargs.pop('temperature', 0.0)
+        top_p = kwargs.pop('top_p', 0.5)
+        if temperature == 0.0:
+            top_p = 1.0
+        kwargs['temperature'] = temperature
+        kwargs['top_p'] = top_p
+
         # Ollama path
         if provider.lower() == "ollama":
             options = kwargs
@@ -404,15 +410,18 @@ class InferenceManager:
                     return ''.join([block.message.content for block in response.choices])
         if provider.lower() == "mistral":
             async with self.semaphore:
+                if model_name.startswith('magistral'):
+                    for k in ['temperature', 'top_p', 'top_k']:
+                        kwargs.pop(k, None)
                 if stream:
-                    streamer = await self.client.chat.stream_async(
+                    streamer = await self.client_mistral.chat.stream_async(
                         model=model_name,
                         messages=messages,
                         **kwargs
                     )
                     return streamer
                 else:
-                    response = await self.client_openai.chat.complete_async(
+                    response = await self.client_mistral.chat.complete_async(
                         model=model_name,
                         messages=messages,
                         **kwargs

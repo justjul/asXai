@@ -97,9 +97,9 @@ llm:
     - openai/o3-mini-2025-01-31
     - openai/gpt-4.1-mini-2025-04-14
     - openai/gpt-4o-mini-2024-07-18
-    - mistral/mistral-large-2411
+    - mistral/mistral-large-2407
     - mistral/mistral-medium-latest
-    - mistral/magistral-medium-latest
+    - mistral/mistral-small-2503
     - ollama/gemma3:12b
     - ollama/gemma2:27b
     - ollama/mistral-small:24b
@@ -131,9 +131,9 @@ llm:
     - openai/gpt-4.1-mini-2025-04-14
     - openai/gpt-4o-mini-2024-07-18
     - openai/gpt-4o-2024-08-06
-    - mistral/mistral-large-2411
+    - mistral/mistral-large-2407
     - mistral/mistral-medium-latest
-    - mistral/magistral-medium-latest
+    - mistral/mistral-small-2503
     - ollama/gemma3:12b
     - ollama/gemma2:27b
     - ollama/mistral-small:24b
@@ -286,6 +286,7 @@ chat:
             - You must NEVER cite anything that is not in the provided article IDs.\n
             - DO NOT generate section titles or headings — only the answer body.
             - If no source supports a statement, avoid making it.\n
+            - Make sure equations are formatted in LaTeX markdown
 
             Here below are the section title and scope:\n
             - Section Title: <TITLE>\n
@@ -325,6 +326,11 @@ chat:
             If **no articles** are provided in the context, do **not** cite any articles and simply emphasize that no articles related to this query were found in the database.
 
             Answer directly to the user, using the same language as the user's.
+
+            Whenever you include an equation, wrap it in LaTeX math delimiters, for example
+            \n\n$$J_s = \frac{\mu_s\,k_B\,T\,c_s\,C\,c_{s,1}}{J_v}$$\n\n
+            Output all equations this way.
+            
             Here is the user's query:\n
             <CONTENT>\n
   instruct_contentEditor: |
@@ -350,6 +356,10 @@ chat:
             Do **not** insert any commentary or headers—return only the revised text.
             Use the same language as in the original draft.
 
+            Whenever you include an equation, wrap it in LaTeX math delimiters, for example
+            \n\n$$J_s = \frac{\mu_s\,k_B\,T\,c_s\,C\,c_{s,1}}{J_v}$$\n\n
+            Output all equations this way.
+
             ### Input
             **Title**: <TITLE>
             **Draft**: <CONTENT>
@@ -371,6 +381,10 @@ chat:
             4. Keep section headers if present in the original draft.
             5. Improve the abstract: make it scientifically precise, concise, and reflective of the full text.  
             6. Do **not** add or remove any citations, and do **not** insert any commentary—return only the revised text.
+
+            Whenever you include an equation, wrap it in LaTeX math delimiters, for example
+            \n\n$$J_s = \frac{\mu_s\,k_B\,T\,c_s\,C\,c_{s,1}}{J_v}$$\n\n
+            Output all equations this way.
 
             ### Input
             <CONTENT>

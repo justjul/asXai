@@ -1,5 +1,7 @@
 import { useState, useRef, useMemo  } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math'
+import rehypeMathjax from 'rehype-mathjax'
 import remarkGfm from 'remark-gfm';
 import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -10,6 +12,7 @@ import './ChatApp.css';
 
 
 const API_URL = import.meta.env.VITE_API_URL;
+
 
 export async function authFetch(user, url, options = {}) {
   const token = await user.getIdToken();
@@ -1608,8 +1611,10 @@ export default function ChatApp() {
                 </div>
               ) : 
                 (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
+                  <ReactMarkdown
+                  key={streamingNotebookIds.has(notebookId) ? 'no-math' : 'with-math'}
+                  remarkPlugins={streamingNotebookIds.has(notebookId)? [remarkGfm]:[remarkMath, remarkGfm]}
+                  rehypePlugins={streamingNotebookIds.has(notebookId) ? [] : [rehypeMathjax]}
                   components={{
                     a({ href, children }) {
                       const paperId = href?.replace('#', '');
@@ -1653,6 +1658,7 @@ export default function ChatApp() {
                 >
                   {msg.content}
                 </ReactMarkdown>
+                
               )}
 
               {msg.query_id && (
