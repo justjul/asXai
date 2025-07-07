@@ -1,0 +1,15 @@
+{
+  "redirects": [
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "asxai.org"
+        }
+      ],
+      "destination": "https://www.asxai.org",
+      "permanent": true
+    }
+  ]
+}
