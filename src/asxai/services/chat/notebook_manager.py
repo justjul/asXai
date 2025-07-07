@@ -233,10 +233,7 @@ class NotebookManager:
                         for pl in search_history if pl.get('doi', None)]
 
         if not doi_list:
-            doi_list = ['10.1371/journal.pbio.3002506',
-                        '10.1101/2023.11.30.569354',
-                        '10.1371/journal.pbio.3002538']
-            # return ["No valid DOI"]
+            return ["No valid DOI"]
 
         refList = []
         for doi in doi_list:
