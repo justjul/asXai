@@ -357,17 +357,17 @@ def update(
         with open(txt_inprogress_dummy, "wb") as f:
             pickle.dump([0], f, protocol=pickle.HIGHEST_PROTOCOL)
 
-        endpoint = (
-            f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
-            f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
-            f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
-        )
-
         # endpoint = (
         #     f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
         #     f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
-        #     f'&minCitationCount={int(min_citation)}&year={year}'
+        #     f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
         # )
+
+        endpoint = (
+            f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
+            f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
+            f'&minCitationCount={int(min_citation)}&year={year}'
+        )
 
         articles = get_s2_articles_year(endpoint, specs_str, year)
 
