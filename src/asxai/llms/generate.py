@@ -20,6 +20,7 @@ from ollama import AsyncClient
 from groq import AsyncGroq
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
+from mistralai import Mistral
 
 import anthropic
 import ollama
@@ -110,6 +111,11 @@ class InferenceManager:
             timeout=client_timeout,
             max_retries=5
         )
+        self.client_mistral = Mistral(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            timeout_ms=client_timeout * 1000,
+            max_retries=5
+        )
 
         # Limit concurrent calls
         self.semaphore = asyncio.Semaphore(self.max_threads)
@@ -196,6 +202,8 @@ class InferenceManager:
             elif isinstance(streamer, openai.AsyncStream):
                 if hasattr(chunk, "choices"):
                     token = chunk.choices[0].delta.content or ""
+            elif 'mistralai' in str(type(streamer)):
+                token = chunk.data.choices[0].delta.content or ""
             elif hasattr(chunk, "message"):  # ollama
                 token = chunk["message"]["content"] or ""
             else:
@@ -252,6 +260,8 @@ class InferenceManager:
             elif isinstance(streamer, openai.AsyncStream):
                 if hasattr(chunk, "choices"):
                     token = chunk.choices[0].delta.content or ""
+            elif 'mistralai' in str(type(streamer)):
+                token = chunk.data.choices[0].delta.content or ""
             elif hasattr(chunk, "message"):  # ollama
                 token = chunk["message"]["content"] or ""
             else:
@@ -389,6 +399,22 @@ class InferenceManager:
                         messages=messages,
                         stream=False,
                         seed=42,
+                        **kwargs
+                    )
+                    return ''.join([block.message.content for block in response.choices])
+        if provider.lower() == "mistral":
+            async with self.semaphore:
+                if stream:
+                    streamer = await self.client.chat.stream_async(
+                        model=model_name,
+                        messages=messages,
+                        **kwargs
+                    )
+                    return streamer
+                else:
+                    response = await self.client_openai.chat.complete_async(
+                        model=model_name,
+                        messages=messages,
                         **kwargs
                     )
                     return ''.join([block.message.content for block in response.choices])

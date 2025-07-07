@@ -15,6 +15,7 @@ dependencies = [
     "groq",
     "anthropic",
     "openai",
+    "mistralai",
 
     "pyarrow",
     "python-dotenv",

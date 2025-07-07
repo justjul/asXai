@@ -91,17 +91,20 @@ llm:
     - groq/llama-3.3-70b-versatile
     - groq/mistral-saba-24b
     - groq/qwen-qwq-32b
-    - ollama/gemma3:12b
-    - ollama/gemma2:27b
-    - ollama/mistral-small:24b
-    - ollama/deepseek-r1:32b
-    - ollama/deepseek-r1:14b
     - anthropic/claude-3-7-sonnet-20250219
     - anthropic/claude-3-5-haiku-20241022
     - openai/o4-mini-2025-04-16
     - openai/o3-mini-2025-01-31
     - openai/gpt-4.1-mini-2025-04-14
     - openai/gpt-4o-mini-2024-07-18
+    - mistral/mistral-large-2411
+    - mistral/mistral-medium-latest
+    - mistral/magistral-medium-latest
+    - ollama/gemma3:12b
+    - ollama/gemma2:27b
+    - ollama/mistral-small:24b
+    - ollama/deepseek-r1:32b
+    - ollama/deepseek-r1:14b
   model_list_dev:
     - groq/meta-llama/llama-4-scout-17b-16e-instruct
     - groq/compound-beta
@@ -115,11 +118,6 @@ llm:
     - groq/llama-3.3-70b-versatile
     - groq/mistral-saba-24b
     - groq/qwen-qwq-32b
-    - ollama/gemma3:12b
-    - ollama/gemma2:27b
-    - ollama/mistral-small:24b
-    - ollama/deepseek-r1:32b
-    - ollama/deepseek-r1:14b
     - anthropic/claude-opus-4-20250514
     - anthropic/claude-sonnet-4-20250514
     - anthropic/claude-3-7-sonnet-20250219
@@ -133,6 +131,14 @@ llm:
     - openai/gpt-4.1-mini-2025-04-14
     - openai/gpt-4o-mini-2024-07-18
     - openai/gpt-4o-2024-08-06
+    - mistral/mistral-large-2411
+    - mistral/mistral-medium-latest
+    - mistral/magistral-medium-latest
+    - ollama/gemma3:12b
+    - ollama/gemma2:27b
+    - ollama/mistral-small:24b
+    - ollama/deepseek-r1:32b
+    - ollama/deepseek-r1:14b
   ollama_port: 11434
   ollama_host: localhost
   client_timeout: 120.0
