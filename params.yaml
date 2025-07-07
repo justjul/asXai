@@ -101,9 +101,7 @@ llm:
     - mistral/mistral-medium-latest
     - mistral/mistral-small-2503
     - ollama/gemma3:12b
-    - ollama/gemma2:27b
     - ollama/mistral-small:24b
-    - ollama/deepseek-r1:32b
     - ollama/deepseek-r1:14b
   model_list_dev:
     - groq/meta-llama/llama-4-scout-17b-16e-instruct

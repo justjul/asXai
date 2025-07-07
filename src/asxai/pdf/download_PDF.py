@@ -1,3 +1,14 @@
+"""
+asxai.pdf.download_PDF module
+
+Provides functionality to download research paper PDFs using two methods:
+1. HTTP download via Selenium WebDriver.
+2. Google Storage download via gsutil (for arXiv pdfs).
+
+Supports concurrent downloads using multiprocessing pools, dynamic download directory management,
+queue tracking, and cleanup utilities for Chrome/Chromium processes.
+"""
+
 import config
 from asxai.utils import load_params
 from functools import partial
@@ -19,130 +30,154 @@ from selenium.webdriver.remote.remote_connection import RemoteConnection
 import subprocess
 
 import atexit
+import psutil
 
 from asxai.logger import get_logger
 from asxai.utils import get_tqdm, running_inside_docker
-import psutil
 
+# Initialize logger for this module
 logger = get_logger(__name__, level=config.LOG_LEVEL)
 
+# Load configuration parameters for PDF downloading
 params = load_params()
 pdf_config = params["pdf"]
 
 
 class PaperInfo(TypedDict):
+    """
+    TypedDict to represent minimal information needed to download a paper.
+
+    Attributes:
+        paperId: Unique identifier for the paper.
+        openAccessPdf: URL or URI to the PDF file.
+    """
     paperId: str
     openAccessPdf: str
 
 
 class PDFdownloader:
-    def __init__(self,
-                 downloads_dir: str,
-                 source: str = "http",
-                 headless: Optional[bool] = False,
-                 worker_id: Optional[int] = 0,
-                 timeout_loadpage: Optional[float] = 15,
-                 timeout_startdw: Optional[float] = 5):
+    """
+    Handles downloading of single or multiple PDFs via HTTP or Google Storage (gsutil).
+    Uses Selenium for HTTP downloads to handle browser-based interactions.
+    """
+
+    def __init__(
+        self,
+        downloads_dir: str,
+        source: str = "http",
+        headless: Optional[bool] = False,
+        worker_id: Optional[int] = 0,
+        timeout_loadpage: Optional[float] = 15,
+        timeout_startdw: Optional[float] = 5
+    ):
+        """
+        Handles downloading PDFs either via HTTP (through Selenium) or via Google Storage (gsutil).
+
+        Attributes:
+            source: 'http' or 'gs', indicating download method.
+            downloads_dir: Filesystem path where papers will be saved.
+            headless: Run Chrome in headless mode if True.
+            worker_id: Identifier for multi-process workers.
+            timeout_loadpage: Max seconds to wait for page load.
+            timeout_startdw: Max seconds to wait for download to begin.
+        """
         self.source = source
-        self.queue = []
+        self.queue = []  # Track pending paperIds
         self.headless = headless
         self.worker_id = worker_id
 
+        # Determine Selenium hub hostname (Docker vs local)
         hostname = "selenium-hub" if running_inside_docker() else "localhost"
 
+        # Configure local and Chrome container download paths
         self.downloads_dir = downloads_dir
         year_dir = pathlib.Path(downloads_dir).stem
+        # Chrome container's default download directory for seluser
         self.chrome_downloads_dir = "/home/seluser/Downloads/" + year_dir
 
+        # URL for remote Selenium WebDriver
         self.selenium_hub_url = os.getenv(
-            "SELENIUM_HUB_URL", f"http://{hostname}:4444/wd/hub")
-
-        temp_dir = tempfile.gettempdir()
-        # self.user_data_dir = tempfile.mkdtemp(
-        #     prefix=f"chrome-profile-{self.worker_id}-", dir=temp_dir)
-        if self.source == "http":
-            self.driver = self._s2_init_driver(headless)
-        else:
-            self.driver = None
+            "SELENIUM_HUB_URL",
+            f"http://{hostname}:4444/wd/hub"
+        )
 
         self.timeout_startdw = timeout_startdw
         self.timeout_loadpage = timeout_loadpage
+
+        # Markers indicating blocked/error pages
         self.block_markers = {
             "captcha",
             "verify you are human",
             "not a robot",
             "forbidden",
             "error: 500",
-            "this site can’t be reached"}
-
+            "this site can’t be reached"
+        }
         self.error_markers = {
             "just a moment",
             "privacy error",
             "validate user",
-            "error 500"}
+            "error 500"
+        }
+
+        # Initialize Selenium driver only for HTTP source
+        self.driver = None
+        if self.source == "http":
+            self.driver = self._s2_init_driver(headless)
 
     def _s2_init_driver(self, headless: bool = False):
-        # chromedriver_path = shutil.which("chromedriver")
-        # if not chromedriver_path:
-        #     raise FileNotFoundError(
-        #         "chromedriver not found in your PATH. Please install it or add it to PATH.")
-        # service = Service(executable_path=chromedriver_path)
+        """
+        Initialize a Selenium Remote WebDriver session connected to Selenium hub.
+        Retries on failure up to 3 times.
+        """
 
         options = webdriver.ChromeOptions()
-        # options.binary_location = "/usr/bin/chromium-browser"
-        # options.add_argument(f"--user-data-dir={str(self.user_data_dir)}")
-        # options.add_argument("--disable-gpu")
-        # options.add_argument("--no-sandbox")
-        # options.add_argument("--disable-dev-shm-usage")
+        # Run in headless mode if specified
         if headless:
             options.add_argument("--headless=new")
-        # prefs = {
-        #     "plugins.always_open_pdf_externally": True,
-        #     "download.prompt_for_download": False,
-        #     "download.default_directory": str(self.chrome_downloads_dir),
-        #     "download.directory_upgrade": True}
-
+        # Recommended flags for container environments
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+
+        # Set Chrome preferences for direct PDF download without prompt
         prefs = {
             "plugins.always_open_pdf_externally": True,
             "download.prompt_for_download": False,
             "download.default_directory": str(self.chrome_downloads_dir)}
         options.add_experimental_option("prefs", prefs)
-        # chromedriver_path = shutil.which("chromedriver")
 
-        waitforSession = 0
+        # Attempt to connect to remote WebDriver
+        retry_count = 0
         max_retries = 3
         retry_delay = 3
-        conn_timeout = 60
-        while waitforSession < max_retries:
+        conn_timeout = 60  # seconds for session creation
+        while retry_count < max_retries:
             try:
-                # driver = webdriver.Chrome(service=service, options=options)
-                driver = webdriver.Remote(command_executor=self.selenium_hub_url,
-                                          options=options)
+                driver = webdriver.Remote(
+                    command_executor=self.selenium_hub_url,
+                    options=options
+                )
                 RemoteConnection.set_timeout(conn_timeout)
-                break
+                # Short delay to ensure session stable
+                time.sleep(0.5)
+                return driver
             except Exception as e:
                 logger.warning(
-                    f"Session creation failed.\n\
-                        {e}\n\
-                        Retrying ({waitforSession + 1}/{max_retries})..."
+                    f"Session creation failed ({retry_count+1}/{max_retries}): {e}"
                 )
-                time.sleep(retry_delay)  # Wait before retrying
-                waitforSession += 1
-        else:
-            logger.error(
-                f"Failed to create a Selenium session after {max_retries} attempts"
-            )
-            # raise RuntimeError(
-            #     f"Failed to create a Selenium session after {max_retries} attempts"
-            # )
+                time.sleep(retry_delay)
+                retry_count += 1
 
-        time.sleep(0.5)
+        # If all retries failed, log error and leave driver as None
+        logger.error(
+            f"Failed to create a Selenium session after {max_retries} attempts"
+        )
+        return None
 
-        return driver
-
-    def close(self):
+    def close(self) -> None:
+        """
+        Gracefully close the Selenium WebDriver session.
+        """
         if self.driver is not None:
             try:
                 time.sleep(1)
@@ -151,10 +186,22 @@ class PDFdownloader:
             finally:
                 self.driver = None
 
-    def reset_queue(self):
+    def reset_queue(self) -> None:
+        """
+        Clear the internal download queue tracking.
+        """
         self.queue = []
 
     def download(self, paperInfo: PaperInfo):
+        """
+        Download a single paper based on the configured source.
+        Chooses HTTP or GS method.
+
+        Attributes:
+            paperInfo: Dictionary with paperId and openAccessPdf link
+        Return: 
+            Updated paperInfo with 'status' field
+        """
         if self.source == "http":
             paperInfo = self._http_download(paperInfo)
         elif self.source.lower() == "gs":
@@ -163,7 +210,12 @@ class PDFdownloader:
         return paperInfo
 
     def _http_download(self, paperInfo: PaperInfo):
+        """
+        Download PDF via HTTP using Selenium browser automation.
+        Handles dynamic download path, retries blocked pages, and status tracking.
+        """
         try:
+            # Create target directories
             extensions = ("*.pdf", "*.crdownload")
             paper_dir = os.path.join(
                 self.downloads_dir, paperInfo["paperId"])
@@ -175,6 +227,7 @@ class PDFdownloader:
 
             self.queue.append(paperInfo["paperId"])
 
+            # Ensure driver is initialized
             if self.driver is None:
                 self.driver = self._s2_init_driver(self.headless)
 
@@ -183,26 +236,20 @@ class PDFdownloader:
                 "Page.setDownloadBehavior",
                 {"behavior": "allow", "downloadPath": chrome_paper_dir})
 
+            # Standardize URL to HTTPS
             clean_url = re.sub(r"^http://", "https://",
                                paperInfo["openAccessPdf"])
             filename = None
             self.driver.set_page_load_timeout(self.timeout_loadpage)
 
-            # script = f"""
-            #         const link = document.createElement('a');
-            #         link.href = '{clean_url}';
-            #         document.body.appendChild(link);
-            #         link.click();
-            #         document.body.removeChild(link);
-            #         """
-
-            # self.driver.execute_script(script)
-
+            # Visit URL to trigger download
             self.driver.get(clean_url)
 
+            # Monitor for download start or blocking errors
             end_time_startdw = time.time() + self.timeout_startdw
             download_status = "download too long"
 
+            # If a block marker is detected, abort early
             if (any(marker.lower() in self.driver.page_source.lower()
                     for marker in self.block_markers)
                     or "crawlprevention" in self.driver.current_url
@@ -211,6 +258,7 @@ class PDFdownloader:
                            for marker in self.error_markers)):
                 download_status = self.driver.current_url
             else:
+                # Poll filesystem for new PDF or .crdownload files
                 while time.time() < end_time_startdw:
                     filename = [
                         fname
@@ -231,11 +279,15 @@ class PDFdownloader:
 
         return paperInfo
 
-    def is_download_finished(self):
+    def is_download_finished(self) -> bool:
+        """
+        Check if all queued downloads have completed (no .crdownload files remain).
+        """
         if os.path.isdir(self.downloads_dir):
             for paperId in self.queue:
                 dir_path = os.path.join(self.downloads_dir, paperId)
                 if os.path.isdir(dir_path):
+                    # If any temp file exists or folder recently modified, still downloading
                     try:
                         if (glob.glob(os.path.join(dir_path, "*.crdownload"))
                                 or time.time() - os.path.getmtime(dir_path) < self.timeout_loadpage):
@@ -245,6 +297,11 @@ class PDFdownloader:
         return True
 
     def _gs_download(self, paperInfo: PaperInfo):
+        """
+        Download PDF from Google Storage using `gsutil cp`.
+
+        Retries on version mismatches and network errors.
+        """
         extensions = ("*.pdf")
         paper_download_dir = os.path.join(
             self.downloads_dir, paperInfo["paperId"])
@@ -261,6 +318,7 @@ class PDFdownloader:
 
         for retry in range(n_attempts + 1):
             try:
+                # If retrying, adjust version number
                 if retry > 0 and version_match:
                     version = int(version_match.group(1)) - retry
                     if version <= 0:
@@ -296,6 +354,9 @@ class PDFdownloader:
 
 
 def close_all_chrome_sessions(verbose: bool = True):
+    """
+    Kill all running Chrome/Chromium processes to free resources.
+    """
     nkill = 0
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         if proc.info["name"] and (
@@ -313,11 +374,16 @@ def close_all_chrome_sessions(verbose: bool = True):
 
 
 def download_worker_init(
-        downloads_dir: str,
-        source: str = "http",
-        timeout_loadpage: Optional[float] = 15,
-        timeout_startdw: Optional[float] = 5,
-        run_headless: Optional[float] = False):
+    downloads_dir: str,
+    source: str = "http",
+    timeout_loadpage: Optional[float] = 15,
+    timeout_startdw: Optional[float] = 5,
+    run_headless: Optional[float] = False
+) -> None:
+    """
+    Initialize a global PDFdownloader instance for each worker.
+    Registered with multiprocessing.Pool initializer.
+    """
     global downloader
     downloader = PDFdownloader(downloads_dir,
                                source=source,
@@ -326,18 +392,28 @@ def download_worker_init(
                                timeout_loadpage=timeout_loadpage,
                                timeout_startdw=timeout_startdw)
 
+    # Ensure driver is closed on worker exit
     atexit.register(download_worker_close)
 
 
 def download_worker_close():
+    """
+    Cleanup function to close the downloader at worker exit.
+    """
     global downloader
     downloader.close()
 
 
 def download_PDF_workers(papers):
+    """
+    Download a batch of papers in a worker process.
+
+    Waits for all downloads to complete before returning statuses.
+    """
     global downloader
     try:
         output = [downloader.download(paper) for paper in papers]
+        # Wait until filesystem indicates all downloads finished
         while not downloader.is_download_finished():
             time.sleep(1)
         downloader.reset_queue()
@@ -347,12 +423,18 @@ def download_PDF_workers(papers):
         downloader.close()
 
 
-def downloaded_year_done(directory: str):
+def downloaded_year_done(directory: str) -> bool:
+    """
+    Check if a 'done' marker folder exists, indicating completion.
+    """
     folder_list = os.listdir(directory)
     return 'done' in folder_list
 
 
-def collect_downloaded_ids(directory: str):
+def collect_downloaded_ids(directory: str) -> List[str]:
+    """
+    List paper IDs which have a .pdf file present.
+    """
     folder_list = os.listdir(directory)
     paper_downloaded = []
     for paper_id in folder_list:
@@ -365,14 +447,27 @@ def collect_downloaded_ids(directory: str):
 
 
 def download_PDFs(
-        paperdata: pd.DataFrame,
-        year: int,
-        n_jobs: Optional[int] = pdf_config['n_jobs_download'],
-        timeout_loadpage: Optional[float] = pdf_config['timeout_loadpage'],
-        timeout_startdw: Optional[float] = pdf_config['timeout_startdw'],
-        save_pdfs_to: Optional[str] = pdf_config['save_pdfs_to'],
-        run_headless: Optional[bool] = pdf_config['run_headless']):
+    paperdata: pd.DataFrame,
+    year: int,
+    n_jobs: Optional[int] = pdf_config['n_jobs_download'],
+    timeout_loadpage: Optional[float] = pdf_config['timeout_loadpage'],
+    timeout_startdw: Optional[float] = pdf_config['timeout_startdw'],
+    save_pdfs_to: Optional[str] = pdf_config['save_pdfs_to'],
+    run_headless: Optional[bool] = pdf_config['run_headless']
+):
+    """
+    Orchestrate parallel downloading of PDFs for a given year.
 
+    Arguments:
+        paperdata: DataFrame with 'text' and 'metadata' containing paperId and URLs.
+        year: Publication year of papers.
+        n_jobs: Number of parallel worker processes.
+        save_pdfs_to: Base directory to save PDFs; uses config.TMP_PATH if None.
+        run_headless: Launch Chrome in headless mode.
+
+    Creates subdirectories per paperId and a 'done' marker on completion.
+    """
+    # Determine base downloads directory
     if save_pdfs_to is not None:
         downloads_dir_base = save_pdfs_to
     else:
@@ -385,11 +480,13 @@ def download_PDFs(
     os.chmod(downloads_dir, 0o777)
 
     logger.info(f"Downloading pdfs for year {year}")
-    paperInfo = pd.merge(paperdata["text"][["paperId", "openAccessPdf"]],
-                         paperdata["metadata"][[
-                             "paperId", "authorName"]],
-                         on="paperId",
-                         how="inner")
+    # Merge necessary columns into a single table
+    paperInfo = pd.merge(
+        paperdata["text"][["paperId", "openAccessPdf"]],
+        paperdata["metadata"][["paperId", "authorName"]],
+        on="paperId",
+        how="inner"
+    )
 
     paperInfo_s = {"http": paperInfo[paperInfo["openAccessPdf"].str.startswith("http")],
                    "gs": paperInfo[paperInfo["openAccessPdf"].str.startswith("gs:")], }
@@ -406,11 +503,11 @@ def download_PDFs(
             batch_size = minibatch_size * n_jobs  # 512
             Npapers = len(paperInfo_s)
             tqdm = get_tqdm()
+            # Iterate over batches
             with tqdm(range(math.ceil(Npapers / (batch_size + 1))),
                       desc=f"Downloading {Npapers} papers from {year}") as pbar:
                 try:
                     for i in pbar:
-                        # close_all_chrome_sessions()
                         print(downloads_dir)
                         endtime = time.time() + timeout_loadpage * batch_size
 
@@ -418,6 +515,7 @@ def download_PDFs(
                                                  batch_size: (i+1)*batch_size].to_dict(orient="records")
 
                         Nbatch = len(batch)
+                        # Break into minibatches for each process
                         minibatches = [batch[k * minibatch_size: min(Nbatch, (k + 1) * minibatch_size)]
                                        for k in range(Nbatch // minibatch_size + 1)]
 
@@ -426,20 +524,24 @@ def download_PDFs(
 
                         if minibatches:
                             pdf_downloaded, pdf_new = [], []
+                            # Launch worker pool
                             download_pool = multiprocessing.Pool(
                                 processes=n_jobs,
-                                initializer=partial(download_worker_init,
-                                                    source=source,
-                                                    downloads_dir=downloads_dir,
-                                                    timeout_loadpage=timeout_loadpage,
-                                                    timeout_startdw=timeout_startdw,
-                                                    run_headless=run_headless))
+                                initializer=partial(
+                                    download_worker_init,
+                                    source=source,
+                                    downloads_dir=downloads_dir,
+                                    timeout_loadpage=timeout_loadpage,
+                                    timeout_startdw=timeout_startdw,
+                                    run_headless=run_headless
+                                )
+                            )
 
                             with download_pool:
                                 async_dwload = [download_pool.apply_async(download_PDF_workers, (b,))
                                                 for b in minibatches]
+                                # Monitor progress until done or timeout
                                 pending_dwload = set(async_dwload)
-
                                 while pending_dwload:
                                     if len(pdf_new) == 0 and time.time() > endtime:
                                         logger.info(
@@ -453,7 +555,7 @@ def download_PDFs(
                                         downloads_dir)
                                     pdf_new = [
                                         pdf for pdf in pdf_dw if pdf not in pdf_downloaded]
-
+                                    # Check for ready and timed-out tasks
                                     for task in list(pending_dwload):
                                         if task.ready():
                                             res_dw = task.get()
@@ -479,4 +581,5 @@ def download_PDFs(
                     # pbar.close()
                     # raise e
 
+    # Mark completion
     os.mkdir(os.path.join(downloads_dir, 'done'))

@@ -683,6 +683,7 @@ async def chat_process(payload, inference_manager):
         await Notebook_manager.chat_cleanup(task_id)
         if chat_manager.mode in ["update"]:
             await Notebook_manager.set_update_time(task_id)
+        deleted_notebooks = await Notebook_manager.notebooks_cleanup(chat_manager.user_id)
 
     return full_response
 

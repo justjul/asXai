@@ -331,3 +331,59 @@ class NotebookManager:
             f"DIFF in search history: {len(search_history) - len(new_search_history)} out of {len(search_history)}")
         print(all_paper_ids)
         return len(search_history) - len(new_search_history)
+
+    async def notebooks_cleanup(self, user_id):
+        user_dir = os.path.join(self.users_root, user_id)
+        if not os.path.exists(user_dir):
+            return []
+
+        deleted = []
+        kept = []
+
+        for f in os.listdir(user_dir):
+            if f.endswith(".chat.json"):
+                task_id = f[:-10]
+                chat_path = os.path.join(user_dir, f)
+
+                try:
+                    with open(chat_path, "r") as j:
+                        chat_data = json.load(j)
+
+                    if chat_data:
+                        kept.append(task_id)
+                        continue
+
+                    deleted.append(task_id)
+                    os.remove(chat_path)
+
+                    # Remove related files
+                    search_path = os.path.join(user_dir, f"{task_id}.json")
+                    summaries_path = os.path.join(
+                        user_dir, f"{task_id}.summaries.json")
+                    if os.path.isfile(search_path):
+                        os.remove(search_path)
+                    if os.path.isfile(summaries_path):
+                        os.remove(summaries_path)
+
+                    # Remove task_id directory if it exists
+                    task_dir = os.path.join(user_dir, task_id)
+                    if os.path.isdir(task_dir):
+                        shutil.rmtree(task_dir)
+
+                except Exception as e:
+                    print(f"Failed to process {f}: {e}")
+                    continue
+
+        for f in os.listdir(user_dir):
+            if all(not f.startswith(k) for k in kept):
+                f_path = os.path.join(user_dir, f)
+                try:
+                    if os.path.isfile(f_path):
+                        os.remove(f_path)
+                    elif os.path.isdir(f_path):
+                        shutil.rmtree(f_path)
+                except Exception as e:
+                    print(f"Failed to remove {f_path}: {e}")
+                    continue
+
+        return deleted
