@@ -6,7 +6,7 @@
 # will be fired up. At the end, only selenium, chrome and database-update are
 # stopped and removed, leaving qdrant running
 
-# Forward all args to dataset-update
+# Forward all args to dataset-update 
 echo "Running database-update with arguments: $@"
 docker compose --env-file .env.compose run --rm database-update \
     python -m asxai.services.database.update "$@"
