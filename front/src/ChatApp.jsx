@@ -831,18 +831,21 @@ export default function ChatApp() {
   };
 
   function buildFuzzyRegex(paperId) {
-    const parts = paperId.split('');
-    const patterns = [];
+    const fuzzy = paperId.split('').map(ch => `${ch}\\s*?`).join('');
+    return new RegExp(fuzzy, 'g');
 
-    // for every contiguous block of 5 characters, make a fuzzy subpattern
-    for (let i = 0; i <= parts.length - 5; i++) {
-      const slice5 = parts.slice(i, i + 5);
-      const fuzzy5 = slice5.map(ch => `${ch}\\s*?`).join('');
-      patterns.push(fuzzy5);
-    }
+    // const parts = paperId.split('');
+    // const patterns = [];
 
-    // combine with | so that any of those 5‐letter runs will match
-    return new RegExp(patterns.join('|'), 'g');
+    // // for every contiguous block of 5 characters, make a fuzzy subpattern
+    // for (let i = 0; i <= parts.length - 5; i++) {
+    //   const slice5 = parts.slice(i, i + 5);
+    //   const fuzzy5 = slice5.map(ch => `${ch}\\s*?`).join('');
+    //   patterns.push(fuzzy5);
+    // }
+
+    // // combine with | so that any of those 5‐letter runs will match
+    // return new RegExp(patterns.join('|'), 'g');
   }
 
   function buildCollapseRegex(label) {
