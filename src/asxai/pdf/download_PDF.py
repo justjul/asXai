@@ -1,7 +1,7 @@
 """
 asxai.pdf.download_PDF module
 
-Provides functionality to download research paper PDFs using two methods:
+Provides functionality to download PDFs using two methods:
 1. HTTP download via Selenium WebDriver.
 2. Google Storage download via gsutil (for arXiv pdfs).
 

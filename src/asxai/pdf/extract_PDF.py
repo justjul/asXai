@@ -29,46 +29,85 @@ from asxai.utils import load_params
 import logging
 from asxai.logger import get_logger
 
+# Module-level logger
 logger = get_logger(__name__, level=config.LOG_LEVEL)
+
+# Suppress verbose pdfminer logs
 pdfminer_logger = logging.getLogger('pdfminer')
 pdfminer_logger.setLevel(logging.ERROR)
 
+# Load parameters for PDF extraction
 params = load_params()
 pdf_config = params["pdf"]
 
 
 class PaperInfo(TypedDict):
+    """
+    Holds minimal information for a PDF extraction task.
+
+    Attributes:
+        paperId (str): Unique paper identifier.
+        openAccessPdf (str): URL or local path to the PDF file.
+    """
     paperId: str
     openAccessPdf: str
 
 
 class PDFextractor:
-    def __init__(
-            self,
-            download_dir: str,
-            keepPDF: Optional[bool] = False,
-            timeout: Optional[int] = 60,
-            max_pages: Optional[Union[int, List[int]]] = None,
-            n_word_th: Optional[int] = 50):
+    """
+    Monitors a download directory for completed PDFs downloads and extracts text blocks.
 
+    Key steps:
+    1. Wait for PDF files in per-paper subdirectories.
+    2. Determine pages to parse based on word thresholds.
+    3. Use pdfminer to split pages into text blocks with layout metadata.
+    4. Serialize extraction output to pickle files.
+    5. Optionally clean up original PDFs.
+    """
+
+    def __init__(
+        self,
+        download_dir: str,
+        keepPDF: Optional[bool] = False,
+        timeout: Optional[int] = 60,
+        max_pages: Optional[Union[int, List[int]]] = None,
+        n_word_th: Optional[int] = 50
+    ):
+        """
+        Initialize PDFextractor.
+
+        Args:
+            download_dir: Base folder containing per-paper download subfolders.
+            keepPDF: Whether to preserve PDF files after extraction.
+            timeout: How long (s) to wait for a PDF to appear before skipping.
+            max_pages: If list [from_start, from_end], limits pages considered.
+            n_word_th: Minimum words for a page to be valid.
+        """
         self.download_dir = download_dir
         self.keepPDF = keepPDF
         self.timeout = timeout
         self.max_pages = max_pages
         self.n_word_th = n_word_th
+
+        # Create extraction output directory
         year_dir = Path(self.download_dir).stem
         self.extracted_dir = config.TMP_PATH / "extracted" / year_dir
         os.makedirs(self.extracted_dir, exist_ok=True)
         os.chmod(self.extracted_dir, 0o777)
 
     def extractPDFs(self, papers: List[PaperInfo]):
-        # dir_path_orig = [os.path.join(downloads_dir, pdf_data['paperId']) for pdf_data in textdata]
+        """
+        Process a batch of PaperInfo items, extracting each PDF when available.
+
+        Args:
+            papers: List of dicts containing 'paperId' and optional 'valid_pages'.
+        Returns:
+            paperIds that were processed.
+        """
+        # Track download directories and initial timestamps
         dir_list = [{"id": pdf_data["paperId"], "time": None}
                     for pdf_data in papers]
         while dir_list:
-            # if os.path.isdir(downloads_dir):
-            #     dir_list = os.listdir(downloads_dir) if dir_list is None else dir_list
-            # dir_list.sort(key=lambda name: os.path.getmtime(os.path.join(downloads_dir, name)))
             for dirname in dir_list:
                 dir_path = os.path.join(self.download_dir, dirname["id"])
                 if os.path.isdir(dir_path):
