@@ -639,7 +639,7 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year) -> None:
 
         metadata_fp = year_metadata_dir / f'metadata_{year}'
 
-        if not os.path.isfile(metadata_fp):
+        if not os.path.exists(metadata_fp):
             logger.info(
                 f"No database found for year {year}: download articles from s2 first")
             continue
