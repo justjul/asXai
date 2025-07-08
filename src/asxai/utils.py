@@ -22,6 +22,20 @@ import threading
 from mlflow.models.signature import infer_signature
 from mlflow.tracking import MlflowClient
 
+import torch
+from torch.utils.data import Dataset
+from transformers import AutoConfig
+import numpy as np
+from dateutil.relativedelta import relativedelta
+
+from asxai.dataIO import load_data
+from asxai.vectorDB import QdrantManager
+from asxai.utils import load_params
+
+params = load_params()
+reranking_config = params["reranking"]
+qdrant_config = params["qdrant"]
+
 # Map string ops to Python operators
 _OP_MAP = {
     "==": operator.eq,
@@ -319,3 +333,110 @@ def clean_runs_keep_top_k(model_name, k=3, metric="accuracy"):
         print(e)
         print(
             f"YOU SHOULD RUN: sudo chmod -R 777 on {all_model_path.parent.parent}")
+
+
+async def triplets_from_cite(qdrant,
+                             years: Union[int, List[int]],
+                             deltaMonths: int = reranking_config['cite_deltaMonths'],
+                             topK_near_cite_range: List[int] = reranking_config['topK_near_cite_range'],
+                             model_type: str = 'reranker'):
+    paperdata = load_data(years,
+                          data_types=['text', 'metadata'])
+    all_paperIds = paperdata['metadata']['paperId'].to_list()
+
+    # WARNING: There may be an issue here if arXiv paper Ids replace those from s2.
+    # But for now we'll just ignore it
+    cited_refs = [ref for ref_list in paperdata['metadata']
+                  ['referenceIds'] for ref in ref_list.split(';') if ref != '']
+    cited_refs = set(cited_refs).intersection(all_paperIds)
+
+    positive_pairs = [(paperdata['metadata']['publicationDate'].iloc[i], paperdata['metadata']['paperId'].iloc[i], [
+                       ref for ref in ref_list.split(';') if ref in cited_refs]) for i, ref_list in enumerate(paperdata['metadata']['referenceIds'])]
+
+    positive_pairs = [p for p in positive_pairs if p[2]]
+
+    res = await qdrant.client.get_collection(qdrant.collection_name_ids)
+    vector_size = res.config.params.vectors.size
+
+    triplets = []
+    for pubdate, paper_Id, ref_Ids in positive_pairs:
+        date_obj = datetime.strptime(pubdate, "%Y-%m-%d")
+        delta_months_before = date_obj - relativedelta(months=deltaMonths)
+        date_lim = delta_months_before.strftime("%Y-%m-%d")
+        for ref_id in ref_Ids:
+            res = await qdrant.query_batch_streamed(query_vectors=[np.random.randn(vector_size).tolist()],
+                                                    topKs=50,
+                                                    topK_per_paper=0,
+                                                    payload_filters=[[
+                                                        ['paperId', '==', ref_id]]],
+                                                    with_vectors=True,
+                                                    )
+            if res[0].points:
+                ref_embed = res[0].points[0].vector
+                res = await qdrant.query_batch_streamed(query_vectors=[ref_embed],
+                                                        topKs=1,
+                                                        topK_per_paper=0,
+                                                        offset=np.random.randint(
+                                                            *topK_near_cite_range),
+                                                        payload_filters=[[['publicationDate', 'lt', date_lim],
+                                                                         ['paperId', '!=', ref_Ids + [paper_Id]]]],
+                                                        )
+                if res[0].points:
+                    pos_id = ref_id
+                    neg_id = res[0].points[0].payload['paperId']
+                    if model_type.lower() == 'reranker':
+                        triplets.append((paper_Id, pos_id, neg_id))
+                    elif model_type.lower() == 'innovater':
+                        triplets.append((pos_id, paper_Id, neg_id))
+    return triplets
+
+
+class CiteDataset(Dataset):
+    def __init__(self,
+                 query_embed=None,
+                 query_Ids=None,
+                 positive_Ids=None,
+                 negative_Ids=None,
+                 years=None,
+                 model_type: str = 'reranker',
+                 qdrant_model: str = qdrant_config["model_name"],):
+        self.query_embed = query_embed
+        self.query_Ids = query_Ids if query_embed else None
+        self.positive_Ids = positive_Ids
+        self.negative_Ids = negative_Ids
+        self.years = years or [2024, 2025]
+        self.model_type = model_type
+        self.qdrant = QdrantManager()
+
+        self.vector_size = AutoConfig.from_pretrained(qdrant_model).hidden_size
+
+        self.async_runner = AsyncRunner()
+
+    def buildTriplets(self):
+        if not (self.query_embed or self.query_Ids):
+            self.triplets = self.async_runner.run(
+                triplets_from_cite(self.qdrant, self.years, self.model_type))
+
+    def _get_qdrant_embeddings(self, paperIds):
+        async def run_qdrant(paperIds):
+            res = await self.qdrant.query_batch_streamed(
+                query_vectors=[np.random.randn(self.vector_size).tolist()],
+                topKs=3,
+                topK_per_paper=0,
+                payload_filters=[[['paperId', '==', paperIds]]],
+                with_vectors=True,
+            )
+            embeds = {pt.payload["paperId"]: pt.vector for pt in res[0].points}
+            return embeds
+
+        return self.async_runner.run(run_qdrant(paperIds))
+
+    def __len__(self):
+        return len(self.triplets)
+
+    def __getitem__(self, idx):
+        q_id, p_id, n_id = self.triplets[idx]
+        embeds = self._get_qdrant_embeddings([q_id, p_id, n_id])
+        return (torch.tensor(embeds[q_id], dtype=torch.float32),
+                torch.tensor(embeds[p_id], dtype=torch.float32),
+                torch.tensor(embeds[n_id], dtype=torch.float32))

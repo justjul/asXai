@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
+
 
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -17,12 +17,10 @@ import os
 import json
 import config
 
-from asxai.dataIO import load_data
-from asxai.vectorDB import QdrantManager
-
 from typing import Union, List
 from asxai.utils import load_params
 from asxai.utils import log_and_register_model, auto_promote_best_model, clean_runs_keep_top_k, set_mlflow_uri
+from asxai.utils import CiteDataset
 from asxai.utils import AsyncRunner
 from asxai.logger import get_logger
 
@@ -30,12 +28,157 @@ logger = get_logger(__name__, level=config.LOG_LEVEL)
 
 params = load_params()
 reranking_config = params["reranking"]
+innovating_config = params["innovating"]
 qdrant_config = params["qdrant"]
 
 async_runner = AsyncRunner()
 
 
-class RerankEncoder(nn.Module):
+def pad(tensors):
+    max_len = max([x.size(0) for x in tensors])
+    emb_dim = tensors[0].size(1)
+    out = torch.zeros(len(tensors), max_len, emb_dim)
+    for i, x in enumerate(tensors):
+        out[i, :x.size(0)] = x
+    return out
+
+
+def collate_fn(batch):
+    """
+    Pads sequences in batch to the longest chunk length.
+    Returns: (Q, P, N) padded to shape (B, T_max, D)
+    """
+    q_list, p_list, n_list = zip(*batch)
+    return pad(q_list), pad(p_list), pad(n_list)
+
+
+class AttentionPooling(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.query = nn.Parameter(torch.randn(input_dim))
+        self.linear = nn.Linear(input_dim, input_dim)
+
+    def forward(self, x):
+        # x: (B, T, D)
+        scores = torch.einsum('btd,d->bt', self.linear(x),
+                              self.query)  # (B, T)
+        weights = F.softmax(scores, dim=1)  # (B, T)
+        pooled = torch.einsum('btd,bt->bd', x, weights)  # (B, D)
+        return pooled
+
+
+class BaseEncoder(nn.Module):
+    def __init__(self, config_dict):
+        super().__init__()
+        self._config = config_dict
+        for k, v in config_dict.items():
+            setattr(self, k, v)
+
+        self.emb_dim = AutoConfig.from_pretrained(
+            self.qdrant_model).hidden_size
+
+        self.pos_emb = nn.Parameter(torch.zeros(self.max_len, self.emb_dim))
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.emb_dim,
+            nhead=self.nhead,
+            dim_feedforward=self.emb_dim,
+            dropout=self.dropout,
+            batch_first=True,
+        )
+        self._init_identity_transformer_layer(encoder_layer)
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer, num_layers=self.num_layers)
+
+        self.projection = nn.Linear(self.emb_dim, self.emb_dim)
+        nn.init.eye_(self.projection.weight)
+        nn.init.zeros_(self.projection.bias)
+
+        self.to(self.device)
+
+    @property
+    def device(self):
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _init_identity_transformer_layer(self, layer):
+        nn.init.zeros_(layer.linear1.weight)
+        nn.init.zeros_(layer.linear1.bias)
+        nn.init.zeros_(layer.linear2.weight)
+        nn.init.zeros_(layer.linear2.bias)
+        for name, param in layer.self_attn.named_parameters():
+            if "weight" in name or "bias" in name:
+                nn.init.zeros_(param)
+        for ln in [layer.norm1, layer.norm2]:
+            nn.init.ones_(ln.weight)
+            nn.init.zeros_(ln.bias)
+
+    def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]):
+        if not isinstance(x, torch.Tensor):
+            x = pad(x).to(self.device)
+        seq_len = x.size(1)
+        x = x + self.pos_emb[:seq_len]
+        x = self.transformer(x)
+        x = self.projection(x)
+        return x
+
+    def save(self):
+        model_dir = config.MODELS_PATH / self.name
+        os.makedirs(model_dir, exist_ok=True)
+
+        torch.save(self.state_dict(), os.path.join(model_dir, "model.pt"))
+
+        model_config = {k: getattr(self, k) for k in self._config}
+        with open(os.path.join(model_dir, "config.json"), "w") as f:
+            json.dump(model_config, f)
+
+    @classmethod
+    def load(cls, model_name: str = "innovator-default", version: int = None):
+        set_mlflow_uri()
+        client = MlflowClient()
+
+        logger.setLevel(config.LOG_LEVEL)
+        if version is None:
+            # Load the version tagged with 'status' = 'production'
+            logger.info(f"Will load {model_name} with status production")
+            versions = client.search_model_versions(f"name='{model_name}'")
+            prod_versions = [
+                v for v in versions
+                if v.tags.get("status", "").lower() == "production"
+            ]
+            if not prod_versions:
+                logger.error(f"No production model found for '{model_name}'")
+                return None
+            best_version = max(prod_versions, key=lambda v: int(v.version))
+            version = best_version.version
+
+        logger.info(f"Loading {model_name} - version-{version}")
+
+        model_uri = f"models:/{model_name}/{version}"
+
+        try:
+            model = mlflow.pytorch.load_model(model_uri)
+            logger.info(f"{model_uri} loaded")
+            model.version = str(version)
+
+            model_version_info = client.get_model_version(
+                name=model_name, version=version)
+            training_date = model_version_info.tags.get("training_date")
+            if training_date:
+                model.training_date = training_date
+            else:
+                model.training_date = "unknown"
+        except Exception as e:
+            logger.error(f"Failed to load model from {model_uri}: {e}")
+            return None
+
+        if not isinstance(model, cls):
+            logger.error(
+                f"Loaded model is of type {type(model)}, expected {cls.__name__}")
+            return None
+
+        return model
+
+
+class RerankEncoder(BaseEncoder):
     def __init__(self,
                  name: str = "reranker-default",
                  nhead: int = reranking_config['nhead'],
@@ -45,73 +188,17 @@ class RerankEncoder(nn.Module):
                  temperature: float = reranking_config['temperature'],
                  lr: float = reranking_config["learning_rate"],
                  qdrant_model: str = qdrant_config["model_name"],):
-        super().__init__()
-        # learnable positional embeddings
-
-        self._config = {"name": name,
-                        "nhead": nhead,
-                        "num_layers": num_layers,
-                        "dropout": dropout,
-                        "max_len": max_len,
-                        "temperature": temperature,
-                        "lr": lr,
-                        "qdrant_model": qdrant_model, }
-        for key, value in self._config.items():
-            setattr(self, key, value)
-
-        self.emb_dim = AutoConfig.from_pretrained(
-            self.qdrant_model).hidden_size
-
-        self.pos_emb = nn.Parameter(torch.zeros(max_len, self.emb_dim))
-        encoder_layer = nn.TransformerEncoderLayer(d_model=self.emb_dim,
-                                                   nhead=nhead,
-                                                   dim_feedforward=self.emb_dim,
-                                                   dropout=dropout,
-                                                   batch_first=True)
-
-        self._init_identity_transformer_layer(encoder_layer)
-
-        self.transformer = nn.TransformerEncoder(encoder_layer,
-                                                 num_layers=num_layers)
-        # optional scoring projection
-        self.projection = nn.Linear(self.emb_dim, self.emb_dim)
-        nn.init.eye_(self.projection.weight)
-        nn.init.zeros_(self.projection.bias)
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.to(device)
-        self.device = device
-
-    def _init_identity_transformer_layer(self, layer):
-        # Feedforward weights
-        nn.init.zeros_(layer.linear1.weight)
-        nn.init.zeros_(layer.linear1.bias)
-        nn.init.zeros_(layer.linear2.weight)
-        nn.init.zeros_(layer.linear2.bias)
-
-        # Self-attention weights
-        for name, param in layer.self_attn.named_parameters():
-            if "weight" in name:
-                nn.init.zeros_(param)
-            elif "bias" in name:
-                nn.init.zeros_(param)
-
-        # LayerNorm weights = 1, bias = 0
-        for ln in [layer.norm1, layer.norm2]:
-            nn.init.ones_(ln.weight)
-            nn.init.zeros_(ln.bias)
-
-    def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]):
-        """
-        x: (batch_size, num_chunks, emb_dim)
-        returns: (batch_size, num_chunks, emb_dim)
-        """
-        if not isinstance(x, torch.Tensor):
-            x = pad(x).to(self.device)
-        seq_len = x.size(1)
-        x = x + self.pos_emb[:seq_len]
-        x = self.transformer(x)
-        return self.projection(x)
+        config = {
+            "name": name,
+            "nhead": nhead,
+            "num_layers": num_layers,
+            "dropout": dropout,
+            "max_len": max_len,
+            "temperature": temperature,
+            "lr": lr,
+            "qdrant_model": qdrant_model,
+        }
+        super().__init__(config)
 
     def compute_triplet_loss(self,
                              Q: torch.Tensor,
@@ -195,194 +282,89 @@ class RerankEncoder(nn.Module):
             min(years_range), max(years_range)+1)]
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        rerankDataset = RerankerDataset(years=years)
+        rerankDataset = CiteDataset(years=years, model_type='reranker')
+        rerankDataset.buildTriplets()
 
         logger.setLevel(config.LOG_LEVEL)
 
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        train_reranker(self, rerankDataset, optimizer, device=device)
+        train_encoder(self, rerankDataset, optimizer, device=device)
 
-    def save(self):
-        model_dir = config.MODELS_PATH / self.name
-        os.makedirs(model_dir, exist_ok=True)
 
-        torch.save(self.state_dict(), os.path.join(model_dir, "model.pt"))
+class InnovEncoder(BaseEncoder):
+    def __init__(self, name: str = "innovator-default",
+                 nhead: int = innovating_config['nhead'],
+                 num_layers: int = innovating_config['num_layers'],
+                 dropout: float = innovating_config['dropout'],
+                 max_len: int = innovating_config['max_len'],
+                 temperature: float = innovating_config['temperature'],
+                 lr: float = innovating_config["learning_rate"],
+                 qdrant_model: str = qdrant_config["model_name"],):
+        config = {
+            "name": name,
+            "nhead": nhead,
+            "num_layers": num_layers,
+            "dropout": dropout,
+            "max_len": max_len,
+            "temperature": temperature,
+            "lr": lr,
+            "qdrant_model": qdrant_model,
+        }
+        super().__init__(config)
+        self.pool = AttentionPooling(input_dim=self.emb_dim)
 
-        model_config = {k: getattr(self, k) for k in self._config}
-        with open(os.path.join(model_dir, "config.json"), "w") as f:
-            json.dump(model_config, f)
+    def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]):
+        x = super().forward(x)  # (B, T, D)
+        x = self.pool(x)        # (B, D)
+        return x
 
-    @classmethod
-    def load(cls, model_name: str = "reranker-default", version: int = None):
-        set_mlflow_uri()
-        client = MlflowClient()
+    def compute_triplet_loss(self, Q: torch.Tensor, P: torch.Tensor, N: torch.Tensor):
+        Q = F.normalize(Q, p=2, dim=-1)
+        P = F.normalize(P, p=2, dim=-1)
+        N = F.normalize(N, p=2, dim=-1)
+
+        pos_sim = (Q * P).sum(dim=-1)  # (B,)
+        neg_sim = (Q * N).sum(dim=-1)  # (B,)
+
+        logits = torch.stack([pos_sim, neg_sim], dim=1)  # (B, 2)
+        labels = torch.zeros(Q.size(0), dtype=torch.long, device=Q.device)
+        loss = F.cross_entropy(logits, labels)
+        return loss
+
+    def compute_cosine_loss(self, predicted: torch.Tensor, target: torch.Tensor):
+        predicted = F.normalize(predicted, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+        return 1 - (predicted * target).sum(dim=-1).mean()
+
+    def compute_margin_cosine_loss(self, predicted, target, margin=0.2):
+        predicted = F.normalize(predicted, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+        sim = (predicted * target).sum(dim=-1)
+        loss = (1 - sim).clamp(min=margin).mean()
+        return loss
+
+    def train_innovator_from_cite(self,
+                                  years_range: List[int] = innovating_config["years_cite_range"]):
+        if not isinstance(years_range, list):
+            years_range = [years_range]
+        years = [years for years in range(
+            min(years_range), max(years_range)+1)]
+
+        innovDataset = CiteDataset(years=years, model_type='innovator')
+        innovDataset.buildTriplets()
 
         logger.setLevel(config.LOG_LEVEL)
-        if version is None:
-            # Load the version tagged with 'status' = 'production'
-            logger.info(f"Will load {model_name} with status production")
-            versions = client.search_model_versions(f"name='{model_name}'")
-            prod_versions = [
-                v for v in versions
-                if v.tags.get("status", "").lower() == "production"
-            ]
-            if not prod_versions:
-                logger.error(f"No production model found for '{model_name}'")
-                return None
-            best_version = max(prod_versions, key=lambda v: int(v.version))
-            version = best_version.version
 
-        logger.info(f"Loading {model_name} - version-{version}")
-
-        model_uri = f"models:/{model_name}/{version}"
-
-        try:
-            model = mlflow.pytorch.load_model(model_uri)
-            logger.info(f"{model_uri} loaded")
-            model.version = str(version)
-
-            model_version_info = client.get_model_version(
-                name=model_name, version=version)
-            training_date = model_version_info.tags.get("training_date")
-            if training_date:
-                model.training_date = training_date
-            else:
-                model.training_date = "unknown"
-        except Exception as e:
-            logger.error(f"Failed to load model from {model_uri}: {e}")
-            return None
-
-        if not isinstance(model, cls):
-            logger.error(
-                f"Loaded model is of type {type(model)}, expected {cls.__name__}")
-            return None
-
-        return model
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        train_encoder(self, innovDataset, optimizer, device=self.device)
 
 
-async def triplets_from_cite(qdrant,
-                             years: Union[int, List[int]],
-                             deltaMonths: int = reranking_config['cite_deltaMonths'],
-                             topK_near_cite_range: List[int] = reranking_config['topK_near_cite_range']):
-    paperdata = load_data(years,
-                          data_types=['text', 'metadata'],
-                          filters=[('pdf_status', '==', 'extracted')])
-    all_paperIds = paperdata['metadata']['paperId'].to_list()
-    cited_refs = [ref for ref_list in paperdata['metadata']
-                  ['referenceIds'] for ref in ref_list.split(';') if ref != '']
-    cited_refs = set(cited_refs).intersection(all_paperIds)
-
-    positive_pairs = [(paperdata['metadata']['publicationDate'].iloc[i], paperdata['metadata']['paperId'].iloc[i], [
-                       ref for ref in ref_list.split(';') if ref in cited_refs]) for i, ref_list in enumerate(paperdata['metadata']['referenceIds'])]
-
-    positive_pairs = [p for p in positive_pairs if p[2]]
-
-    res = await qdrant.client.get_collection(qdrant.collection_name_ids)
-    vector_size = res.config.params.vectors.size
-
-    triplets = []
-    for pair in positive_pairs:
-        pubdate, paper_Id, ref_Ids = pair
-        date_obj = datetime.strptime(pubdate, "%Y-%m-%d")
-        three_months_before = date_obj - relativedelta(months=deltaMonths)
-        date_lim = three_months_before.strftime("%Y-%m-%d")
-        for ref_id in ref_Ids:
-            res = await qdrant.query_batch_streamed(query_vectors=[np.random.randn(vector_size).tolist()],
-                                                    topKs=50,
-                                                    topK_per_paper=0,
-                                                    payload_filters=[[
-                                                        ['paperId', '==', ref_id]]],
-                                                    with_vectors=True,
-                                                    )
-            if res[0].points:
-                ref_embed = res[0].points[0].vector
-                res = await qdrant.query_batch_streamed(query_vectors=[ref_embed],
-                                                        topKs=1,
-                                                        topK_per_paper=0,
-                                                        offset=np.random.randint(
-                                                            *topK_near_cite_range),
-                                                        payload_filters=[[['publicationDate', 'lt', date_lim],
-                                                                         ['paperId', '!=', ref_Ids + [paper_Id]]]],
-                                                        )
-                if res[0].points:
-                    pos_id = ref_id
-                    neg_id = res[0].points[0].payload['paperId']
-                    triplets.append((paper_Id, pos_id, neg_id))
-    return triplets
-
-
-class RerankerDataset(Dataset):
-    def __init__(self,
-                 query_embed=None,
-                 query_Ids=None,
-                 positive_Ids=None,
-                 negative_Ids=None,
-                 years=None,
-                 qdrant_model: str = qdrant_config["model_name"],):
-        self.query_embed = query_embed
-        self.query_Ids = query_Ids if query_embed else None
-        self.positive_Ids = positive_Ids
-        self.negative_Ids = negative_Ids
-        self.years = years or [2024, 2025]
-        self.qdrant = QdrantManager()
-
-        self.vector_size = AutoConfig.from_pretrained(qdrant_model).hidden_size
-
-        self.async_runner = async_runner
-
-        if not (self.query_embed or self.query_Ids):
-            self.triplets = self.async_runner.run(
-                triplets_from_cite(self.qdrant, self.years))
-
-    def _get_qdrant_embeddings(self, paperIds):
-        async def run_qdrant(paperIds):
-            res = await self.qdrant.query_batch_streamed(
-                query_vectors=[np.random.randn(self.vector_size).tolist()],
-                topKs=3,
-                topK_per_paper=0,
-                payload_filters=[[['paperId', '==', paperIds]]],
-                with_vectors=True,
-            )
-            embeds = {pt.payload["paperId"]: pt.vector for pt in res[0].points}
-            return embeds
-
-        return self.async_runner.run(run_qdrant(paperIds))
-
-    def __len__(self):
-        return len(self.triplets)
-
-    def __getitem__(self, idx):
-        q_id, p_id, n_id = self.triplets[idx]
-        embeds = self._get_qdrant_embeddings([q_id, p_id, n_id])
-        return (torch.tensor(embeds[q_id], dtype=torch.float32),
-                torch.tensor(embeds[p_id], dtype=torch.float32),
-                torch.tensor(embeds[n_id], dtype=torch.float32))
-
-
-def pad(tensors):
-    max_len = max([x.size(0) for x in tensors])
-    emb_dim = tensors[0].size(1)
-    out = torch.zeros(len(tensors), max_len, emb_dim)
-    for i, x in enumerate(tensors):
-        out[i, :x.size(0)] = x
-    return out
-
-
-def collate_fn(batch):
-    """
-    Pads sequences in batch to the longest chunk length.
-    Returns: (Q, P, N) padded to shape (B, T_max, D)
-    """
-    q_list, p_list, n_list = zip(*batch)
-    return pad(q_list), pad(p_list), pad(n_list)
-
-
-def train_reranker(model,
-                   dataset,
-                   optimizer,
-                   device,
-                   epochs: int = reranking_config['training_epochs'],
-                   test_size: float = reranking_config['test_size']):
+def train_encoder(model,
+                  dataset,
+                  optimizer,
+                  device,
+                  epochs: int = reranking_config['training_epochs'],
+                  test_size: float = reranking_config['test_size']):
     set_mlflow_uri()
     mlflow.set_experiment(f"{model.name}")
     with mlflow.start_run(run_name=f"{model.name}"):

@@ -1,6 +1,6 @@
 from asxai.dataset import update, process, update_payloads
 from asxai.dataset.download import arX_update
-from asxai.vectorDB import RerankEncoder
+from asxai.vectorDB import RerankEncoder, InnovEncoder
 from datetime import datetime
 
 from typing import Union, List
@@ -19,6 +19,7 @@ def update_database(mode: str = 'update',
                     min_citations_per_year: float = s2_config['min_citations_per_year'],
                     fields_of_study: List[str] = s2_config['fields_of_study'],
                     update_reranker: bool = False,
+                    update_innovater: bool = False,
                     only_new: bool = False):
     """
     Args:
@@ -27,6 +28,7 @@ def update_database(mode: str = 'update',
         min_citations_per_year: Minimum citation threshold.
         fields_of_study: List of fields to include.
         update_reranker: Whether to retrain the reranker model.
+        update_innovater: Whether to retrain the innovater model.
     """
 
     db_filter = []
@@ -104,6 +106,15 @@ def update_database(mode: str = 'update',
             model.lr = 1e-5  # decreased lr for fine-tuning
 
         model.train_reranker_from_cite(years_range=years)
+
+    if update_innovater:
+        model = InnovEncoder.load()
+        if not model:
+            model = InnovEncoder()
+        else:
+            model.lr = 1e-5  # decreased lr for fine-tuning
+
+        model.train_innovator_from_cite(years_range=years)
 
     logger.info("Process completed.")
 
