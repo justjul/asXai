@@ -39,7 +39,7 @@ from asxai.pdf.extract_PDF import collect_extracted_batch
 
 import config
 from asxai.logger import get_logger
-from asxai.utils import load_params
+from asxai.utils import load_params, load_parquet_dataset
 
 # Initialize logger
 logger = get_logger(__name__, level=config.LOG_LEVEL)
@@ -107,8 +107,8 @@ def download_and_extract(**kwargs):
 
         # Update local text parquet and clean up temp directory
         tmp_dir_year = config.TMP_PATH / "text_to_save" / str(year)
-        extracted_path = os.path.join(tmp_dir_year, f"text_{year}.parquet")
-        final_textdata = pd.read_parquet(extracted_path, engine="pyarrow")
+        extracted_path = tmp_dir_year / f"text_{year}"
+        final_textdata = load_parquet_dataset(extracted_path)
         update_text(final_textdata, year)
         shutil.rmtree(tmp_dir_year)
 
@@ -164,21 +164,19 @@ def run_embedding(
                 for batch_dir in extracted_batches:
                     paper_dir = extracted_dir / batch_dir
 
-                    fp_metadata = paper_dir / "metadata.extracted"
+                    fp_metadata = paper_dir / "metadata"
                     paperdata['metadata'].append(
-                        pd.read_parquet(fp_metadata, engine="pyarrow"))
-                    if os.path.isfile(fp_metadata):
-                        os.remove(fp_metadata)
+                        load_parquet_dataset(fp_metadata))
+                    if os.path.exist(fp_metadata):
+                        shutil.rmtree(fp_metadata)
 
-                    fp_text = paper_dir / "text.extracted"
+                    fp_text = paper_dir / "text"
                     paperdata['text'].append(
-                        pd.read_parquet(fp_text, engine="pyarrow"))
-                    if os.path.isfile(fp_text):
-                        os.remove(fp_text)
+                        load_parquet_dataset(fp_text))
+                    if os.path.exists(fp_text):
+                        shutil.rmtree(fp_text)
 
                     # Clean up batch files
-                    fp_metadata.unlink(missing_ok=True)
-                    fp_text.unlink(missing_ok=True)
                     paper_dir.rmdir()
 
                 paperdata['metadata'] = pd.concat(

@@ -8,7 +8,7 @@
 
 # Forward all args to dataset-update 
 echo "Running database-update with arguments: $@"
-docker compose --env-file .env.compose run --rm database-update \
+docker compose --env-file .env.compose run database-update \
     python -m asxai.services.database.update "$@"
 
 # Stop only chrome and selenium-hub (leave other services like qdrant running)

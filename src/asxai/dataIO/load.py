@@ -19,7 +19,7 @@ import time
 import pandas as pd
 
 from asxai.logger import get_logger
-from asxai.utils import load_params
+from asxai.utils import load_params, load_parquet_dataset, save_parquet_dataset
 
 import multiprocessing
 from functools import partial
@@ -81,8 +81,7 @@ class DataSetManager:
                 continue
 
             # Build expected file path
-            file_name = f"{dtype}_{subset}.parquet"
-            file_path = path / subset / file_name
+            file_path = path / subset / f"{dtype}_{subset}"
 
             # Wait if a concurrent update is in progress
             while True:
@@ -98,13 +97,11 @@ class DataSetManager:
 
             # Fallback if file missing: try zero-padded prefix (originally sourced from s2)
             if not file_path.exists():
-                file_name = f"{dtype}0_{subset}.parquet"
-                file_path = path / subset / file_name
+                file_path = path / subset / f"{dtype}0_{subset}"
 
             # Load if exists, else log and continue
             if file_path.exists():
-                df = pd.read_parquet(
-                    file_path, engine="pyarrow", filters=_filters)
+                df = load_parquet_dataset(file_path, filters=_filters)
                 paperdata[dtype] = df
                 # Capture paper IDs for chaining to next data type
                 paperIds = df['paperId']
@@ -224,11 +221,10 @@ def load_data(
                 dir_path = data_map[dtype][0] / save_as
                 dir_path.mkdir(parents=True, exist_ok=True)
 
-                file_name = f"{dtype}_{save_as}.parquet"
-                file_path = dir_path / file_name
+                file_path = dir_path / f"{dtype}_{save_as}"
 
-                output[dtype].to_parquet(file_path, engine="pyarrow",
-                                         compression="snappy", index=False)
+                save_parquet_dataset(
+                    output[dtype], output_dir=file_path, compression="snappy")
 
     return output
 
@@ -254,10 +250,8 @@ def update_text(newtxtdata, subset):
         txtdata["text"].set_index("doi")).reset_index(drop=False))
 
     # Write back
-    filename = f"text_{str(subset)}.parquet"
-    filepath = config.TEXTDATA_PATH / str(subset) / filename
-    txtdata.to_parquet(filepath, engine="pyarrow",
-                       compression="snappy", index=True)
+    filepath = config.TEXTDATA_PATH / str(subset) / f"text_{str(subset)}"
+    save_parquet_dataset(txtdata, output_dir=filepath, compression="snappy")
 
 
 def update_status(
@@ -303,7 +297,6 @@ def update_status(
                 paperIds), 'status'] = status
 
         # Write back
-        filename = f"text_{str(subset)}.parquet"
-        filepath = config.TEXTDATA_PATH / str(subset) / filename
-        txtdata.to_parquet(filepath, engine="pyarrow",
-                           compression="snappy", index=True)
+        filepath = config.TEXTDATA_PATH / str(subset) / f"text_{str(subset)}"
+        save_parquet_dataset(txtdata, output_dir=filepath,
+                             compression="snappy")

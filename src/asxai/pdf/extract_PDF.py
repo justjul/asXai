@@ -25,7 +25,7 @@ from pdfminer.layout import LTTextContainer, LTTextLine, LTChar, LTTextBox
 from pdfminer.pdfpage import PDFPage
 
 from asxai.utils import get_tqdm
-from asxai.utils import load_params
+from asxai.utils import load_params, save_parquet_dataset
 import logging
 from asxai.logger import get_logger
 
@@ -512,30 +512,25 @@ def extracted_to_text(data, year):
     output_dir_year = config.TMP_PATH / "text_to_save" / str(year)
     os.makedirs(output_dir_year, exist_ok=True)
     os.chmod(output_dir_year, 0o777)
-    filename = f"text_{year}.parquet"
-    filepath = os.path.join(output_dir_year, filename)
+    filepath = output_dir_year / f"text_{year}"
 
-    data.to_parquet(filepath, engine="pyarrow",
-                    compression="snappy", index=True)
+    save_parquet_dataset(data, output_dir=filepath, compression="snappy")
 
 
 def extracted_to_DB(textdata, metadata):
     assert textdata['paperId'].equals(metadata['paperId'])
     id0 = textdata['paperId'].iloc[0]
-    output_dir_DB = Path(os.path.join(
-        config.TMP_PATH, "text_to_embed", id0))
+    output_dir_DB = config.TMP_PATH / "text_to_embed" / id0
     os.makedirs(output_dir_DB, exist_ok=False)
     os.chmod(output_dir_DB, 0o777)
 
-    fp_text = output_dir_DB / "text.extracted"
-    textdata.to_parquet(fp_text.with_suffix(".inprogress"), engine="pyarrow",
-                        compression="snappy", index=True)
-    fp_text.with_suffix(".inprogress").rename(fp_text)
+    fp_text = output_dir_DB / "text.inprogress"
+    save_parquet_dataset(textdata, output_dir=fp_text, compression="snappy")
+    fp_text.rename(output_dir_DB / "text")
 
-    fp_meta = output_dir_DB / "metadata.extracted"
-    metadata.to_parquet(fp_meta.with_suffix(".inprogress"), engine="pyarrow",
-                        compression="snappy", index=True)
-    fp_meta.with_suffix(".inprogress").rename(fp_meta)
+    fp_meta = output_dir_DB / "metadata.inprogress"
+    save_parquet_dataset(metadata, output_dir=fp_meta, compression="snappy")
+    fp_meta.rename(output_dir_DB / "metadata")
 
 
 def collect_extracted_batch(directory: Path):

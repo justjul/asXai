@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import pickle
 from asxai.utils import merge_dicts
-from asxai.utils import load_params
+from asxai.utils import load_params, load_parquet_dataset, save_parquet_dataset
 
 import requests
 from asxai.logger import get_logger
@@ -357,136 +357,53 @@ def update(
         with open(txt_inprogress_dummy, "wb") as f:
             pickle.dump([0], f, protocol=pickle.HIGHEST_PROTOCOL)
 
-        # endpoint = (
-        #     f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
-        #     f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
-        #     f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
-        # )
-
         endpoint = (
             f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
             f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
-            f'&minCitationCount={int(min_citation)}&year={year}'
+            f'&minCitationCount={int(min_citation)}&year={year}&openAccessPdf'
         )
+
+        # endpoint = (
+        #     f'https://api.semanticscholar.org/graph/v1/paper/search/bulk'
+        #     f'?fields={fields_to_return_str}&fieldsOfStudy={fields_of_study_str}'
+        #     f'&minCitationCount={int(min_citation)}&year={year}'
+        # )
 
         articles = get_s2_articles_year(endpoint, specs_str, year)
 
         # Split into metadata vs text
-        metadata = articles.drop(columns=['title', 'abstract', 'status'])
-        text = articles[['paperId', 'title', 'abstract',
-                         'referenceTitles', 'openAccessPdf', 'isOpenAccess', 'status', 'doi']]
-        text0 = text.copy()
+        try:
+            metadata = articles.drop(columns=['title', 'abstract', 'status'])
+            text = articles[['paperId', 'title', 'abstract',
+                            'referenceTitles', 'openAccessPdf', 'isOpenAccess', 'status', 'doi']]
+            text0 = text.copy()
 
-        # Merge with existing files if they exist
-        for df, filename in [(metadata, year_metadata_dir / f"metadata_{year}.parquet"),
-                             (text0, year_text_dir / f"text0_{year}.parquet"),
-                             (text, year_text_dir / f"text_{year}.parquet")]:
-            if filename.exists():
-                old = pd.read_parquet(filename)
-                old = old.replace('None', None)
-                df = df.set_index("doi").combine_first(
-                    old.set_index("doi")).reset_index()
-            # Replacing missing string values
-            string_cols = df.select_dtypes(
-                include=["object", "string"]).columns
-            df.loc[:, string_cols] = df[string_cols].fillna("None")
-            df.to_parquet(filename, engine="pyarrow",
-                          compression="snappy", index=False)
+            # Merge with existing files if they exist
+            for df, filename in [(metadata, year_metadata_dir / f"metadata_{year}"),
+                                 (text0, year_text_dir /
+                                  f"text0_{year}"),
+                                 (text, year_text_dir / f"text_{year}")]:
+                if filename.exists():
+                    old = load_parquet_dataset(filename)
+                    old = old.replace('None', None)
+                    df = df.set_index("doi").combine_first(
+                        old.set_index("doi")).reset_index()
+                # Replacing missing string values
+                string_cols = df.select_dtypes(
+                    include=["object", "string"]).columns
+                df.loc[:, string_cols] = df[string_cols].fillna("None")
+                save_parquet_dataset(
+                    df, output_dir=filename, compression="snappy")
 
-        # if os.path.isfile(metadata_fp):
-        #     old_metadata = pd.read_parquet(metadata_fp)
-        #     old_metadata = old_metadata.replace('None', None)
-        #     metadata = metadata.set_index("doi").combine_first(
-        #         old_metadata.set_index("doi")).reset_index()
-        # if os.path.isfile(text0_fp):
-        #     old_text0 = pd.read_parquet(text0_fp)
-        #     old_text0 = old_text0.replace('None', None)
-        #     text0 = text.set_index("doi").combine_first(
-        #         old_text0.set_index("doi")).reset_index()
-        # if os.path.isfile(text_fp):
-        #     old_text = pd.read_parquet(text_fp)
-        #     old_text = old_text.replace('None', None)
-        #     text = text.set_index("doi").combine_first(
-        #         old_text.set_index("doi")).reset_index()
+            # Trigger arXiv updates and link fixes
+            arX_update(years=year)
 
-        # # drop previous incorporation of arxiv papers that have now been
-        # # incorporated into s2.
-        # dupli_mask = text0.set_index("doi").duplicated(
-        #     subset="title", keep=False)
-        # arxiv_mask = metadata.set_index("doi")['authorId'].isna()
-        # drop_mask = dupli_mask & arxiv_mask
-        # metadata = metadata.set_index("doi")[~drop_mask].reset_index()
-        # text0 = text0.set_index("doi")[~drop_mask].reset_index()
-        # text = text.set_index("doi")[~drop_mask].reset_index()
-
-        # metadata = metadata.fillna('None')
-        # metadata.to_parquet(metadata_fp, engine="pyarrow",
-        #                     compression="snappy", index=False)
-        # text0 = text0.fillna('None')
-        # text0.to_parquet(text0_fp, engine="pyarrow",
-        #                  compression="snappy", index=False)
-        # text = text.fillna('None')
-        # text.to_parquet(text_fp, engine="pyarrow",
-        #                 compression="snappy", index=False)
-
-        # Trigger arXiv updates and link fixes
-        arX_update(years=year)
-
-        # Remove in-progress flags
-        os.remove(meta_inprogress_dummy)
-        os.remove(txt_inprogress_dummy)
-
-
-# def s2_db_update(
-#         years: Union[int, List[int]] = datetime.now().year,
-#         specs: Optional[List[str]] = [
-#             'citationCount', 'influentialCitationCount', 'openAccessPdf', 'references']):
-
-#     years = [years] if isinstance(years, int) else years
-
-#     specs_str = ','.join(s2_validate_fields(specs, {
-#         "citationCount", "influentialCitationCount", "openAccessPdf", "references", "authors.affiliations", "references.paperId", "embedding.specter_v2"}))
-
-#     for year in years:
-#         year_metadata_dir = os.path.join(config.METADATA_PATH, str(year))
-#         year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
-
-#         metadata_fp = os.path.join(year_metadata_dir,
-#                                    f'metadata_{year}.parquet')
-#         text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
-#         text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
-
-#         old_metadata = pd.read_parquet(metadata_fp)
-#         old_text0 = pd.read_parquet(text0_fp)
-#         if os.path.isfile(text_fp):
-#             old_text = pd.read_parquet(text_fp)
-#         else:
-#             old_text = None
-
-#         spec_endpoint = 'https://api.semanticscholar.org/graph/v1/paper/batch'
-#         df_specs = get_s2_articles_batch(spec_endpoint,
-#                                          old_metadata, specs_str)
-#         metadata = df_specs[old_metadata.columns.intersection(
-#             df_specs.columns)]
-#         text0 = df_specs[old_text0.columns.intersection(df_specs.columns)]
-
-#         metadata = metadata.set_index("doi").combine_first(
-#             old_metadata.set_index("doi")).reset_index()
-
-#         metadata.to_parquet(metadata_fp, engine="pyarrow",
-#                             compression="snappy", index=False)
-
-#         text0 = text0.set_index("doi").combine_first(
-#             old_text0.set_index("doi")).reset_index()
-
-#         text0.to_parquet(text0_fp, engine="pyarrow",
-#                          compression="snappy", index=False)
-
-#         if old_text:
-#             text = text0.set_index("doi").combine_first(
-#                 old_text.set_index("doi")).reset_index()
-#             text.to_parquet(text_fp, engine="pyarrow",
-#                             compression="snappy", index=False)
+            # Remove in-progress flags
+            meta_inprogress_dummy.unlink()
+            txt_inprogress_dummy.unlink()
+        except Exception as e:
+            logger.warning('Unable to merge with existing datasets: ' + e)
+            raise e
 
 
 # Mapping of arXiv categories to human-readable fields
@@ -595,12 +512,13 @@ def load_arX_dataset(arXiv_downloads_dir) -> pd.DataFrame:
     Returns:
         DataFrame of the full arXiv metadata snapshot.
     """
-    arXiv_df_path = os.path.join(
-        arXiv_downloads_dir, "arxiv-metadata-oai-snapshot.parquet")
+    arXiv_df_path = arXiv_downloads_dir / "arxiv-metadata-oai-snapshot"
 
-    if (os.path.isfile(arXiv_df_path)
-            and time.time() - os.path.getmtime(arXiv_df_path) < 3600*24*7):
-        return pd.read_parquet(arXiv_df_path)
+    if os.path.exists(arXiv_df_path):
+        lasttime = max(f.stat().st_mtime for f in arXiv_df_path.glob(
+            "**/*") if f.is_file())
+        if time.time() - lasttime < 3600*24*7:
+            return load_parquet_dataset(arXiv_df_path)
 
     # Otherwise download via kaggle CLI
     logger.info(
@@ -616,8 +534,8 @@ def load_arX_dataset(arXiv_downloads_dir) -> pd.DataFrame:
 
     arX_data = arX_to_dataframe(arX_data)
 
-    arX_data.to_parquet(arXiv_df_path, engine="pyarrow",
-                        compression="snappy", index=False)
+    save_parquet_dataset(
+        arX_data, output_dir=arXiv_df_path, compression="snappy")
 
     return arX_data
 
@@ -636,19 +554,18 @@ def arXlinks_update(years: Union[int, List[int]] = datetime.now().year):
     arX_data = load_arX_dataset(arXiv_downloads_dir)
 
     for year in years:
-        year_metadata_dir = os.path.join(config.METADATA_PATH, str(year))
-        year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
+        year_metadata_dir = config.METADATA_PATH / str(year)
+        year_text_dir = config.TEXTDATA_PATH / str(year)
 
         # Load existing tables
-        metadata_fp = os.path.join(year_metadata_dir,
-                                   f'metadata_{year}.parquet')
-        text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
-        text_fp = os.path.join(year_text_dir, f'text_{year}.parquet')
+        metadata_fp = year_metadata_dir / f'metadata_{year}'
+        text0_fp = year_text_dir / f'text0_{year}'
+        text_fp = year_text_dir / f'text_{year}'
 
-        metadata = pd.read_parquet(metadata_fp)
-        text0 = pd.read_parquet(text0_fp)
-        if os.path.isfile(text_fp):
-            text = pd.read_parquet(text_fp)
+        metadata = load_parquet_dataset(metadata_fp)
+        text0 = load_parquet_dataset(text0_fp)
+        if os.path.exists(text_fp):
+            text = load_parquet_dataset(text_fp)
         else:
             text = text0
 
@@ -669,12 +586,10 @@ def arXlinks_update(years: Union[int, List[int]] = datetime.now().year):
         text['openAccessPdf'] = openAccessPdf
 
         # Save back
-        metadata.to_parquet(metadata_fp, engine="pyarrow",
-                            compression="snappy", index=False)
-        text0.to_parquet(text0_fp, engine="pyarrow",
-                         compression="snappy", index=False)
-        text.to_parquet(text_fp, engine="pyarrow",
-                        compression="snappy", index=False)
+        save_parquet_dataset(
+            metadata, output_dir=metadata_fp, compression="snappy")
+        save_parquet_dataset(text0, output_dir=text0_fp, compression="snappy")
+        save_parquet_dataset(text, output_dir=text_fp, compression="snappy")
 
         logger.info(f"arXiv links for year {year} updated")
 
@@ -692,10 +607,10 @@ def filter_arXiv_database(arX_data) -> pd.DataFrame:
     years = sorted(os.listdir(config.TEXTDATA_PATH))
     filt_arXiv = arX_data
     for year in years:
-        year_text_dir = os.path.join(config.TEXTDATA_PATH, str(year))
+        year_text_dir = config.TEXTDATA_PATH / str(year)
 
-        text0_fp = os.path.join(year_text_dir, f'text0_{year}.parquet')
-        text0 = pd.read_parquet(text0_fp)
+        text0_fp = year_text_dir / f'text0_{year}'
+        text0 = load_parquet_dataset(text0_fp)
 
         filt_arXiv = filt_arXiv[~filt_arXiv['doi'].str.lower().isin(
             text0['title'].str.lower().to_list())]
@@ -722,7 +637,7 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year) -> None:
         year_metadata_dir = config.METADATA_PATH / str(year)
         year_text_dir = config.TEXTDATA_PATH / str(year)
 
-        metadata_fp = year_metadata_dir / f'metadata_{year}.parquet'
+        metadata_fp = year_metadata_dir / f'metadata_{year}'
 
         if not os.path.isfile(metadata_fp):
             logger.info(
@@ -731,59 +646,67 @@ def arX_update(years: Union[int, List[int]] = datetime.now().year) -> None:
 
         logger.info(f"updating database with arXiv papers for year {year}")
 
-        old_metadata = pd.read_parquet(metadata_fp)
+        try:
+            old_metadata = load_parquet_dataset(metadata_fp)
 
-        # Filter arXiv by fields-of-study present in old metadata
-        fields = old_metadata['fieldsOfStudy'].apply(
-            lambda x: x.split(',')[0]).unique()
+            # Filter arXiv by fields-of-study present in old metadata
+            fields = old_metadata['fieldsOfStudy'].apply(
+                lambda x: x.split(',')[0]).unique()
 
-        field_mask = arX_data['fieldsOfStudy'].apply(
-            lambda x: any(c in fields for c in x.split(',')))
+            field_mask = arX_data['fieldsOfStudy'].apply(
+                lambda x: any(c in fields for c in x.split(',')))
 
-        # Prepare new metadata and text
-        arX_data_new = arX_data[field_mask]
+            # Prepare new metadata and text
+            arX_data_new = arX_data[field_mask]
 
-        # arX_data_new = arX_data_new[~arX_data_new['title'].isin(
-        #     old_text0)]
-        arX_data_new = arX_data_new[arX_data_new['publicationYear'].astype(
-            int) == year]
-        arX_data_new = arX_data_new.drop_duplicates(subset='title')
-        arX_data_new = arX_data_new.drop_duplicates(subset='doi')
+            # arX_data_new = arX_data_new[~arX_data_new['title'].isin(
+            #     old_text0)]
+            arX_data_new = arX_data_new[arX_data_new['publicationYear'].astype(
+                int) == year]
+            arX_data_new = arX_data_new.drop_duplicates(subset='title')
+            arX_data_new = arX_data_new.drop_duplicates(subset='doi')
 
-        arX_metadata = arX_data_new.drop(columns=['title', 'abstract', 'submitter',
-                                                  'comments', 'journal-ref',
-                                                  'report-no', 'license', 'versions',
-                                                  'authors_parsed', 'status'])
-        arX_text = arX_data_new[['paperId',
-                                 'title', 'abstract',
-                                 'openAccessPdf', 'isOpenAccess', 'status', 'doi']]
+            arX_metadata = arX_data_new.drop(columns=['title', 'abstract', 'submitter',
+                                                      'comments', 'journal-ref',
+                                                      'report-no', 'license', 'versions',
+                                                      'authors_parsed', 'status'])
+            arX_text = arX_data_new[['paperId',
+                                    'title', 'abstract',
+                                     'openAccessPdf', 'isOpenAccess', 'status', 'doi']]
 
-        # Merge with existing
-        # Merge with existing files if they exist
-        for df, filename in [(arX_metadata, year_metadata_dir / f"metadata_{year}.parquet"),
-                             (arX_text, year_text_dir /
-                              f"text0_{year}.parquet"),
-                             (arX_text, year_text_dir / f"text_{year}.parquet")]:
-            if filename.exists():
-                old = pd.read_parquet(filename)
-                old = old.replace('None', None)
-                df = df.set_index("doi").combine_first(
-                    old.set_index("doi")).reset_index()
-            df['status'] = None
-            # Filling missing citation values with 0
-            if 'citationCount' in df.columns:
-                df['citationCount'] = df['citationCount'].fillna(0).astype(int)
-            if 'influentialCitationCount' in df.columns:
-                df['influentialCitationCount'] = df['influentialCitationCount'].fillna(
-                    0).astype(int)
-            # Replacing missing string values
-            string_cols = df.select_dtypes(
-                include=["object", "string"]).columns
-            df[string_cols] = df[string_cols].fillna("None")
-            df.to_parquet(filename, engine="pyarrow",
-                          compression="snappy", index=False)
-            logger.info(
-                f"added {len(df)} , {len(df) - len(old)}")
+            # Merge with existing
+            # Merge with existing files if they exist
+            for df, filename in [
+                (arX_metadata, year_metadata_dir / f"metadata_{year}"),
+                    (arX_text, year_text_dir / f"text0_{year}"),
+                    (arX_text, year_text_dir / f"text_{year}")]:
+                logger.info('Merging arXiv data with existing data')
+                if filename.exists():
+                    old = load_parquet_dataset(filename)
+                    logger.info('Existing data loaded')
+                    old = old.replace('None', None)
+                    df = df.set_index("doi").combine_first(
+                        old.set_index("doi")).reset_index()
+                df['status'] = None
+                # Filling missing citation values with 0
+                if 'citationCount' in df.columns:
+                    df['citationCount'] = df['citationCount'].fillna(
+                        0).infer_objects().astype(int)
+                if 'influentialCitationCount' in df.columns:
+                    df['influentialCitationCount'] = df['influentialCitationCount'].fillna(
+                        0).infer_objects().astype(int)
+                # Replacing missing string values
+                string_cols = df.select_dtypes(
+                    include=["object", "string"]).columns
+                df[string_cols] = df[string_cols].fillna("None")
+
+                logger.info('Saving arXiv data to parquet file')
+                save_parquet_dataset(
+                    df, output_dir=filename, compression="snappy")
+                logger.info(
+                    f"added {len(df)} , {len(df) - len(old)}")
+        except Exception as e:
+            raise e
 
         logger.info(f"updating arXiv links for year {year}")
         arXlinks_update(years=year)
