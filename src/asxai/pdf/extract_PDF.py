@@ -534,18 +534,16 @@ def extracted_to_DB(textdata, metadata):
 
 
 def collect_extracted_batch(directory: Path):
-    if not os.path.isdir(directory):
+    if not directory.is_dir():
         return None
-    folder_list = os.listdir(directory)
+
     extracted_batches = []
-    for extracted_id in folder_list:
-        if os.path.isdir(os.path.join(directory, extracted_id)):
-            text_path = glob.glob(os.path.join(
-                directory, extracted_id, "text.extracted"))
-            metadata_path = glob.glob(os.path.join(
-                directory, extracted_id, "metadata.extracted"))
-            if text_path and metadata_path:
-                extracted_batches.append(extracted_id)
+    for batch_path in directory.iterdir():
+        if batch_path.is_dir():
+            text_dir = batch_path / "text"
+            metadata_dir = batch_path / "metadata"
+            if text_dir.is_dir() and metadata_dir.is_dir():
+                extracted_batches.append(batch_path.name)
 
     return extracted_batches
 
@@ -836,41 +834,6 @@ def _get_block_text_specs(text: str,
             logger.warning(f"Parsing of text blocks failed: {e}")
             continue
 
-    # try:
-    #     matches = list(BLOCK_pattern.finditer(text))
-    # except re.error as e:
-    #     logger.warning(f"Regex parsing failed: {e}")
-    #     return "", ""
-
-    # if len(matches) > 1000:
-    #     logger.warning(
-    #         f"Unrealistic number of text blocks detected: {len(matches)}")
-    #     matches = matches[:500]
-
-    # for match in matches:
-    #     fs_val = float(match.group(1))
-    #     p_val = float(match.group(2))
-    #     b_val = float(match.group(3))
-    #     t_val = float(match.group(4))
-    #     l_val = float(match.group(5))
-    #     r_val = float(match.group(6))
-    #     content = match.group(7).strip()
-    #     words = content.split(' ')
-
-    #     nw = len([w for w in words if _is_normal_text(w)])
-    #     n_words.append(nw)
-
-    #     all_fs += [fs_val]*nw
-    #     all_p += [p_val]*nw
-    #     all_b += [b_val]*nw
-    #     all_t += [t_val]*nw
-    #     all_l += [l_val]*nw
-    #     all_r += [r_val]*nw
-
-    #     blocks.append({'fontsize': fs_val, 'page': p_val, 'bottom': b_val, 'top': t_val,
-    #                    'left': l_val, 'right': r_val, 'nwords': nw,
-    #                    'content': content, 'possible_ref': False})
-
     all_fs_ref = []
     if extract_ref:
         try:
@@ -954,7 +917,6 @@ def get_clean_block_text(text: str,
 def clean_full_text(pdf, extract_ref):
     try:
         full_text = pdf.get("full_text", "")
-        # if not isinstance(full_text, str) or len(full_text) > 1_000_000 or len(full_text) < 500:
         if not isinstance(full_text, str) or len(full_text) < 100:
             logger.warning("Skipping overly short or malformed full_text")
             pdf["main_text"], pdf["ref_text"] = "", ""

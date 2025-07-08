@@ -147,8 +147,7 @@ def run_embedding(
 
     # Stream mode: watch TMP_PATH/text_to_embed until extract_done + empty directory
     else:
-        extracted_dir = Path(os.path.join(
-            config.TMP_PATH, "text_to_embed"))
+        extracted_dir = config.TMP_PATH / "text_to_embed"
         os.makedirs(extracted_dir, exist_ok=True)
         os.chmod(extracted_dir, 0o777)
         while True:
@@ -167,7 +166,7 @@ def run_embedding(
                     fp_metadata = paper_dir / "metadata"
                     paperdata['metadata'].append(
                         load_parquet_dataset(fp_metadata))
-                    if os.path.exist(fp_metadata):
+                    if os.path.exists(fp_metadata):
                         shutil.rmtree(fp_metadata)
 
                     fp_text = paper_dir / "text"
@@ -187,8 +186,6 @@ def run_embedding(
                 logger.info(
                     f"Will now embed {len(paperdata['metadata'])} articles that just got extracted")
                 producer.batch_embeddings(paperdata)
-
-                # extracted_batches = collect_extracted_batch(extracted_dir)
             else:
                 time.sleep(5)
 
