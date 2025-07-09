@@ -240,7 +240,6 @@ services:
       mlflow server 
       --host 0.0.0.0 
       --port 5000
-      --static-prefix /mlflow
     volumes:
       - ${MODEL_ROOT_HOST}/mlflow_storage/mlruns:/mlruns
       - ${MODEL_ROOT_HOST}/mlflow_storage/mlartifacts:/mlartifacts

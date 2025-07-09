@@ -18,6 +18,8 @@ import json
 import config
 
 from typing import Union, List
+from asxai.dataIO import load_data
+from asxai.vectorDB import QdrantManager
 from asxai.utils import load_params
 from asxai.utils import log_and_register_model, auto_promote_best_model, clean_runs_keep_top_k, set_mlflow_uri
 from asxai.utils import CiteDataset
@@ -35,6 +37,8 @@ async_runner = AsyncRunner()
 
 
 def pad(tensors):
+    if tensors[0].dim() < 2:
+        return torch.stack(tensors)
     max_len = max([x.size(0) for x in tensors])
     emb_dim = tensors[0].size(1)
     out = torch.zeros(len(tensors), max_len, emb_dim)
@@ -242,7 +246,6 @@ class RerankEncoder(BaseEncoder):
     ):
         if D_embeds.size(1) == 0:
             return torch.zeros(Q_embeds.size(0), device=Q_embeds.device)
-        logger.info(f"{Q_embeds.size()}, {D_embeds.size()}")
         if Q_embeds.dim() == 2:
             Q_embeds = Q_embeds.unsqueeze(0)
         if D_embeds.dim() == 2:
@@ -298,13 +301,24 @@ class RerankEncoder(BaseEncoder):
         if from_scratch:
             self.init_layers()
 
-        rerankDataset = CiteDataset(years=years, model_type='reranker')
-        rerankDataset.buildTriplets()
+        paperdata = load_data(
+            years, data_types=['text', 'metadata']
+        )
+        rerankDataset = CiteDataset(
+            model_type='reranker',
+            qdrantManager=QdrantManager()
+        )
+        rerankDataset.buildTriplets(
+            paperdata,
+            deltaMonths=reranking_config['cite_deltaMonths'],
+            topK_near_cite_range=reranking_config['topK_near_cite_range']
+        )
 
         logger.setLevel(config.LOG_LEVEL)
 
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        train_encoder(self, rerankDataset, optimizer, device=self.device)
+        train_encoder(
+            self, dataset=rerankDataset, optimizer=optimizer, model_type='reranker')
 
     @classmethod
     def load(cls, model_name: str = "reranker", version: int = None):
@@ -350,7 +364,8 @@ class InnovEncoder(BaseEncoder):
         self,
         Q: torch.Tensor,
         P: torch.Tensor,
-        N: torch.Tensor
+        N: torch.Tensor,
+        return_scores: bool = False,
     ):
         Q = F.normalize(Q, p=2, dim=-1)
         P = F.normalize(P, p=2, dim=-1)
@@ -362,6 +377,10 @@ class InnovEncoder(BaseEncoder):
         logits = torch.stack([pos_sim, neg_sim], dim=1)  # (B, 2)
         labels = torch.zeros(Q.size(0), dtype=torch.long, device=Q.device)
         loss = F.cross_entropy(logits, labels)
+        if return_scores:
+            pos_score = pos_sim
+            neg_score = neg_sim
+            return loss, pos_score, neg_score
         return loss
 
     def compute_cosine_loss(
@@ -393,13 +412,24 @@ class InnovEncoder(BaseEncoder):
         if from_scratch:
             self.init_layers()
 
-        innovDataset = CiteDataset(years=years, model_type='innovator')
-        innovDataset.buildTriplets()
+        paperdata = load_data(
+            years, data_types=['text', 'metadata']
+        )
+        innovDataset = CiteDataset(
+            model_type='innovator',
+            qdrantManager=QdrantManager()
+        )
+        innovDataset.buildTriplets(
+            paperdata,
+            deltaMonths=innovating_config['cite_deltaMonths'],
+            topK_near_cite_range=innovating_config['topK_near_cite_range']
+        )
 
         logger.setLevel(config.LOG_LEVEL)
 
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        train_encoder(self, innovDataset, optimizer, device=self.device)
+        train_encoder(
+            self, dataset=innovDataset, optimizer=optimizer, model_type='innovator')
 
     @classmethod
     def load(cls, model_name: str = "innovator", version: int = None):
@@ -411,7 +441,7 @@ def train_encoder(
     model,
     dataset,
     optimizer,
-    device,
+    model_type,
     epochs: int = reranking_config['training_epochs'],
     test_size: float = reranking_config['test_size']
 ):
@@ -440,6 +470,7 @@ def train_encoder(
         logger.info(
             f"will now train {model.name} on {train_size} samples for {epochs} epochs")
 
+        device = model.device
         model.to(device)
         for epoch in range(epochs):
             model.train()
@@ -447,8 +478,12 @@ def train_encoder(
             for Q, P, N in train_loader:
                 Q, P, N = Q.to(device), P.to(device), N.to(device)
                 Q_out = model(Q)
-                P_out = model(P)
-                N_out = model(N)
+                if model_type == "reranker":
+                    P_out = model(P)
+                    N_out = model(N)
+                elif model_type == "innovator":
+                    P_out = P
+                    N_out = N
                 loss = model.compute_triplet_loss(Q_out, P_out, N_out)
                 optimizer.zero_grad()
                 loss.backward()
@@ -465,8 +500,12 @@ def train_encoder(
                 for Q, P, N in test_loader:
                     Q, P, N = Q.to(device), P.to(device), N.to(device)
                     Q_out = model(Q)
-                    P_out = model(P)
-                    N_out = model(N)
+                    if model_type == "reranker":
+                        P_out = model(P)
+                        N_out = model(N)
+                    elif model_type == "innovator":
+                        P_out = P
+                        N_out = N
                     loss, pos_scores, neg_scores = model.compute_triplet_loss(
                         Q_out, P_out, N_out, return_scores=True)
                     test_loss += loss.item()
