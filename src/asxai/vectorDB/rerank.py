@@ -77,6 +77,15 @@ class BaseEncoder(nn.Module):
         self.emb_dim = AutoConfig.from_pretrained(
             self.qdrant_model).hidden_size
 
+        self.init_layers()
+
+        self.to(self.device)
+
+    @property
+    def device(self):
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def init_layers(self):
         self.pos_emb = nn.Parameter(torch.zeros(self.max_len, self.emb_dim))
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.emb_dim,
@@ -92,12 +101,6 @@ class BaseEncoder(nn.Module):
         self.projection = nn.Linear(self.emb_dim, self.emb_dim)
         nn.init.eye_(self.projection.weight)
         nn.init.zeros_(self.projection.bias)
-
-        self.to(self.device)
-
-    @property
-    def device(self):
-        return "cuda" if torch.cuda.is_available() else "cpu"
 
     def _init_identity_transformer_layer(self, layer):
         nn.init.zeros_(layer.linear1.weight)
@@ -131,7 +134,7 @@ class BaseEncoder(nn.Module):
             json.dump(model_config, f)
 
     @classmethod
-    def load(cls, model_name: str = "innovator-default", version: int = None):
+    def load(cls, model_name: str = None, version: int = None):
         set_mlflow_uri()
         client = MlflowClient()
 
@@ -179,15 +182,17 @@ class BaseEncoder(nn.Module):
 
 
 class RerankEncoder(BaseEncoder):
-    def __init__(self,
-                 name: str = "reranker-default",
-                 nhead: int = reranking_config['nhead'],
-                 num_layers: int = reranking_config['num_layers'],
-                 dropout: float = reranking_config['dropout'],
-                 max_len: int = reranking_config['max_len'],
-                 temperature: float = reranking_config['temperature'],
-                 lr: float = reranking_config["learning_rate"],
-                 qdrant_model: str = qdrant_config["model_name"],):
+    def __init__(
+        self,
+        name: str = "reranker",
+        nhead: int = reranking_config['nhead'],
+        num_layers: int = reranking_config['num_layers'],
+        dropout: float = reranking_config['dropout'],
+        max_len: int = reranking_config['max_len'],
+        temperature: float = reranking_config['temperature'],
+        lr: float = reranking_config["learning_rate"],
+        qdrant_model: str = qdrant_config["model_name"],
+    ):
         config = {
             "name": name,
             "nhead": nhead,
@@ -200,11 +205,13 @@ class RerankEncoder(BaseEncoder):
         }
         super().__init__(config)
 
-    def compute_triplet_loss(self,
-                             Q: torch.Tensor,
-                             P: torch.Tensor,
-                             N: torch.Tensor,
-                             return_scores: bool = False):
+    def compute_triplet_loss(
+        self,
+        Q: torch.Tensor,
+        P: torch.Tensor,
+        N: torch.Tensor,
+        return_scores: bool = False
+    ):
         B, _, D = Q.shape
         Q = F.normalize(Q, p=2, dim=-1)
         P = F.normalize(P, p=2, dim=-1)
@@ -228,9 +235,11 @@ class RerankEncoder(BaseEncoder):
             return loss, pos_score, neg_score
         return loss
 
-    def compute_max_sim(self,
-                        Q_embeds: torch.Tensor,
-                        D_embeds: torch.Tensor):
+    def compute_max_sim(
+        self,
+        Q_embeds: torch.Tensor,
+        D_embeds: torch.Tensor
+    ):
         if D_embeds.size(1) == 0:
             return torch.zeros(Q_embeds.size(0), device=Q_embeds.device)
         logger.info(f"{Q_embeds.size()}, {D_embeds.size()}")
@@ -247,10 +256,12 @@ class RerankEncoder(BaseEncoder):
             dim=-1).values.sum(dim=1)
         return max_sim
 
-    def rerank_score(self,
-                     Q_embeds: Union[List, torch.Tensor],
-                     D_embeds: Union[List, torch.Tensor],
-                     skip_rerank: bool = False):
+    def rerank_score(
+        self,
+        Q_embeds: Union[List, torch.Tensor],
+        D_embeds: Union[List, torch.Tensor],
+        skip_rerank: bool = False
+    ):
         if not isinstance(Q_embeds, torch.Tensor):
             Q_embeds = torch.tensor(Q_embeds)
         if not isinstance(D_embeds, torch.Tensor):
@@ -274,13 +285,18 @@ class RerankEncoder(BaseEncoder):
 
         return max_sim.squeeze(0).cpu().tolist()
 
-    def train_reranker_from_cite(self,
-                                 years_range: List[int] = reranking_config["years_cite_range"]):
+    def train_from_cite(
+        self,
+        years_range: List[int] = reranking_config["years_cite_range"],
+        from_scratch: str = reranking_config["train_from_scratch"]
+    ):
         if not isinstance(years_range, list):
             years_range = [years_range]
         years = [years for years in range(
             min(years_range), max(years_range)+1)]
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        if from_scratch:
+            self.init_layers()
 
         rerankDataset = CiteDataset(years=years, model_type='reranker')
         rerankDataset.buildTriplets()
@@ -288,18 +304,25 @@ class RerankEncoder(BaseEncoder):
         logger.setLevel(config.LOG_LEVEL)
 
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
-        train_encoder(self, rerankDataset, optimizer, device=device)
+        train_encoder(self, rerankDataset, optimizer, device=self.device)
+
+    @classmethod
+    def load(cls, model_name: str = "reranker", version: int = None):
+        model = super().load(model_name=model_name, version=version)
+        return model
 
 
 class InnovEncoder(BaseEncoder):
-    def __init__(self, name: str = "innovator-default",
-                 nhead: int = innovating_config['nhead'],
-                 num_layers: int = innovating_config['num_layers'],
-                 dropout: float = innovating_config['dropout'],
-                 max_len: int = innovating_config['max_len'],
-                 temperature: float = innovating_config['temperature'],
-                 lr: float = innovating_config["learning_rate"],
-                 qdrant_model: str = qdrant_config["model_name"],):
+    def __init__(
+        self, name: str = "innovator",
+        nhead: int = innovating_config['nhead'],
+        num_layers: int = innovating_config['num_layers'],
+        dropout: float = innovating_config['dropout'],
+        max_len: int = innovating_config['max_len'],
+        temperature: float = innovating_config['temperature'],
+        lr: float = innovating_config["learning_rate"],
+        qdrant_model: str = qdrant_config["model_name"],
+    ):
         config = {
             "name": name,
             "nhead": nhead,
@@ -311,14 +334,24 @@ class InnovEncoder(BaseEncoder):
             "qdrant_model": qdrant_model,
         }
         super().__init__(config)
+        self.init_layers()
+
+    def init_layers(self):
+        super().init_layers()
         self.pool = AttentionPooling(input_dim=self.emb_dim)
+        self.to(self.device)
 
     def forward(self, x: Union[torch.Tensor, List[torch.Tensor]]):
         x = super().forward(x)  # (B, T, D)
         x = self.pool(x)        # (B, D)
         return x
 
-    def compute_triplet_loss(self, Q: torch.Tensor, P: torch.Tensor, N: torch.Tensor):
+    def compute_triplet_loss(
+        self,
+        Q: torch.Tensor,
+        P: torch.Tensor,
+        N: torch.Tensor
+    ):
         Q = F.normalize(Q, p=2, dim=-1)
         P = F.normalize(P, p=2, dim=-1)
         N = F.normalize(N, p=2, dim=-1)
@@ -331,7 +364,11 @@ class InnovEncoder(BaseEncoder):
         loss = F.cross_entropy(logits, labels)
         return loss
 
-    def compute_cosine_loss(self, predicted: torch.Tensor, target: torch.Tensor):
+    def compute_cosine_loss(
+        self,
+        predicted: torch.Tensor,
+        target: torch.Tensor
+    ):
         predicted = F.normalize(predicted, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
         return 1 - (predicted * target).sum(dim=-1).mean()
@@ -343,12 +380,18 @@ class InnovEncoder(BaseEncoder):
         loss = (1 - sim).clamp(min=margin).mean()
         return loss
 
-    def train_innovator_from_cite(self,
-                                  years_range: List[int] = innovating_config["years_cite_range"]):
+    def train_from_cite(
+        self,
+        years_range: List[int] = innovating_config["years_cite_range"],
+        from_scratch: str = innovating_config["train_from_scratch"]
+    ):
         if not isinstance(years_range, list):
             years_range = [years_range]
         years = [years for years in range(
             min(years_range), max(years_range)+1)]
+
+        if from_scratch:
+            self.init_layers()
 
         innovDataset = CiteDataset(years=years, model_type='innovator')
         innovDataset.buildTriplets()
@@ -358,13 +401,20 @@ class InnovEncoder(BaseEncoder):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         train_encoder(self, innovDataset, optimizer, device=self.device)
 
+    @classmethod
+    def load(cls, model_name: str = "innovator", version: int = None):
+        model = super().load(model_name=model_name, version=version)
+        return model
 
-def train_encoder(model,
-                  dataset,
-                  optimizer,
-                  device,
-                  epochs: int = reranking_config['training_epochs'],
-                  test_size: float = reranking_config['test_size']):
+
+def train_encoder(
+    model,
+    dataset,
+    optimizer,
+    device,
+    epochs: int = reranking_config['training_epochs'],
+    test_size: float = reranking_config['test_size']
+):
     set_mlflow_uri()
     mlflow.set_experiment(f"{model.name}")
     with mlflow.start_run(run_name=f"{model.name}"):
@@ -386,6 +436,9 @@ def train_encoder(model,
             train_dataset, batch_size=16, shuffle=True, collate_fn=collate_fn)
         test_loader = DataLoader(test_dataset, batch_size=16,
                                  shuffle=False, collate_fn=collate_fn)
+
+        logger.info(
+            f"will now train {model.name} on {train_size} samples for {epochs} epochs")
 
         model.to(device)
         for epoch in range(epochs):
