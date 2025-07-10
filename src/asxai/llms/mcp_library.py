@@ -489,3 +489,57 @@ class GenerationPlannerMCP(BaseModel):
                 section["paperIds"] = all_paperIds
 
         return {"abstract": abstract, "sections": sections}
+
+
+class QuestionGeneratorMCP(BaseModel):
+    """
+    MCP model to find open questions.
+    Fields:
+        sections: List of SectionPlan entries.
+        abstract: 2-3 sentence summary answering the query.
+    """
+    sections: List[SectionPlan]
+    abstract: str = Field(
+        description="A short summary of 2-3 sentences that answers the question")
+
+    @classmethod
+    def generate_prompt(cls, instruct: str) -> str:
+        """
+        Builds the prompt by listing expected fields with descriptions.
+
+        Args:
+            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+
+        Returns:
+            Populated prompt string.
+        """
+        fields = []
+        for field_name, field_obj in cls.model_fields.items():
+            description = field_obj.description or "No description"
+            fields.append(f"- {field_name}: {description}")
+        prompt = instruct.replace("<FIELDS>", "\n".join(fields))
+        return prompt
+
+    @classmethod
+    def parse(cls, response):
+        msg = parse_model_response(response)
+        res = parse_mcp_response(msg['content'])
+
+        abstract = res.get('abstract', [])
+        sections = res.get('sections', [])
+
+        key_map = {
+            'title': ['title', 'topic'],
+            'content': ['description', 'content', 'scope'],
+            'paperIds': ['paper', 'references', 'papers']
+        }
+        extractor = RobustKeyExtractor(key_map)
+        sections = [extractor.extract(section) for section in sections]
+
+        all_paperIds = [
+            paperId for section in sections for paperId in section["paperIds"]]
+        for section in sections:
+            if "introduction" in section["title"].lower() or "tldr" in section["title"].lower():
+                section["paperIds"] = all_paperIds
+
+        return {"abstract": abstract, "sections": sections}

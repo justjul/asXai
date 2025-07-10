@@ -29,14 +29,10 @@ import openai
 
 import requests
 
-from typing import List, Tuple, Union, TypedDict, AsyncGenerator
+from typing import List, Tuple, Union, AsyncGenerator
 from pathlib import Path
-import uuid
 import time
-from dateutil.parser import parse
-from datetime import datetime
 
-from tqdm import tqdm
 from asxai.utils import load_params
 from asxai.utils import running_inside_docker
 
@@ -47,7 +43,7 @@ from .mcp_library import (
     QueryParseMCP, ExpandQueryMCP, KeywordsMCP,
     NotebookTitleMCP, ChatSummarizerMCP,
     RelevantPaperMCP, GenerationPlannerMCP,
-    parse_model_response
+    parse_model_response, QuestionGeneratorMCP,
 )
 
 # Initialize logger
@@ -721,3 +717,24 @@ class InferenceManager:
         results = RelevantPaperMCP.parse(response)
         logger.info(f"Article filter response after parsing: {results}")
         return results
+
+    async def generateQuestions(
+        self,
+        documents: List[str] = None,
+        genQuestions_instruct: str = chat_config['instruct_genQuestions'],
+        **kwargs
+    ) -> List[dict]:
+        """
+        Find open questions from a set of articles, using the QuestionGeneratorMCP.
+        """
+        prompt = QuestionGeneratorMCP.generate_prompt(genQuestions_instruct)
+
+        messages = [{'role': 'user', 'content': doc}
+                    for doc in (documents or [])]
+        messages += [{'role': 'user', 'content': prompt}]
+
+        response = await self.generate(messages=messages, **kwargs)
+
+        result = QuestionGeneratorMCP.parse(response)
+
+        return result

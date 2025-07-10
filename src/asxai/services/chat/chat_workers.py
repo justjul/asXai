@@ -344,16 +344,18 @@ class ChatManager:
         }
         res = requests.post(f"{SEARCH_API_URL}/search", json=payload)
 
-    def load_search_result(self, prefix_id: int):
+    def load_search_result(self, prefix_id: int = None):
         search_query_id = str(prefix_id).strip('_') + '_' + self.query_id
         SEARCH_API_URL = f"http://{SEARCH_HOST}:{SEARCH_PORT}"
+        search_endpoint = f"{SEARCH_API_URL}/search/{self.task_id}"
+        if prefix_id:
+            search_endpoint += f"/{search_query_id}"
         timeout = search_config['timeout']
         endtime = time.time() + timeout
         try:
             while True:
                 try:
-                    res = requests.get(
-                        f"{SEARCH_API_URL}/search/{self.task_id}/{search_query_id}").json()
+                    res = requests.get(search_endpoint).json()
                     res = res['notebook']
                     if (res and search_query_id in {r['query_id'] for r in res}):
                         break
@@ -363,14 +365,17 @@ class ChatManager:
                 if time.time() > endtime:
                     break
 
-            papers = []
-            match_generator = (
-                pl for pl in res if pl['query_id'] == search_query_id and pl.get('paperId'))
-            while True:
-                try:
-                    papers.append(next(match_generator))
-                except StopIteration:
-                    break
+            if prefix_id:
+                papers = []
+                match_generator = (
+                    pl for pl in res if pl['query_id'] == search_query_id and pl.get('paperId'))
+                while True:
+                    try:
+                        papers.append(next(match_generator))
+                    except StopIteration:
+                        break
+            else:
+                papers = [pl for pl in res if pl.get('paperId')]
 
             for paper in papers:
                 if paper['openAccessPdf'].startswith("gs://"):
@@ -396,6 +401,10 @@ async def chat_process(payload, inference_manager):
         if payload["content"].lower() == "*notebook update*":
             logger.info("UPDATE MODE")
             payload["mode"] = "update"
+
+        if payload["content"].lower() == "*explore questions*":
+            logger.info("QUESTION MODE")
+            payload["mode"] = "question"
 
         chat_manager = ChatManager(payload, inference_manager)
 
@@ -444,6 +453,19 @@ async def chat_process(payload, inference_manager):
             user_msg = chat_manager.fetch_user_msg(history)
             search_query = user_msg['search_query']
             papers = user_msg['papers']
+            full_query += ' \n'.join(search_query.get(
+                'queries', ''))
+        elif chat_manager.mode in ["question"]:
+            user_msg = chat_manager.fetch_user_msg(history)
+            search_query = user_msg['search_query']
+            papers = chat_manager.load_search_result()
+            startime = time.time()
+            chat_manager.stream(" *Generating Questions*")
+            Questions = await inference_manager.generateQuestions(
+                documents=serialize_documents(papers),
+                model=model_name
+            )
+            chat_manager.stream(f"*{round(time.time() - startime)}s*")
             full_query += ' \n'.join(search_query.get(
                 'queries', ''))
         elif chat_manager.mode in ["update"]:
@@ -497,7 +519,7 @@ async def chat_process(payload, inference_manager):
 
             chat_manager.stream(f"*{round(time.time() - startime)}s*")
 
-            if not chat_manager.mode in ["update"]:
+            if chat_manager.mode not in ["update"]:
                 search_query = search_queries[0]
             else:
                 search_query = {}
@@ -542,7 +564,7 @@ async def chat_process(payload, inference_manager):
             sections = [
                 {"title": "", "content": full_query, "paperIds": paperIds}]
             abstract = []
-            if not chat_manager.mode in ["update"]:
+            if chat_manager.mode not in ["update"]:
                 if search_query.get('cite_only', False):
                     instruct_writer = chat_config['instruct_insertCitation']
                 else:
@@ -606,7 +628,7 @@ async def chat_process(payload, inference_manager):
 
                 chat_manager.stream(chunk['content'])
 
-            if (not chat_manager.mode in ["update"] and papers
+            if (chat_manager.mode not in ["update"] and papers
                     and (not search_query.get('cite_only', False)
                          or chat_manager.mode in ["expand"])):
                 content_editor = inference_manager.writer(
@@ -640,7 +662,7 @@ async def chat_process(payload, inference_manager):
 
             chat_manager.stream("\n<REVISING>\n")
 
-            if not chat_manager.mode in ["update"]:
+            if chat_manager.mode not in ["update"]:
                 context = [msg for msg in context if msg['model']
                            != 'search-worker']
                 context += [{'role': 'user', 'content': full_query}]

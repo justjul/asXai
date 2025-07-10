@@ -8,7 +8,7 @@ import hashlib
 
 import config
 from asxai.vectorDB import QdrantManager
-from asxai.vectorDB import PaperEmbed, RerankEncoder
+from asxai.vectorDB import PaperEmbed, RerankEncoder, InnovEncoder, compute_max_sim
 import torch
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -28,6 +28,11 @@ async_runner = AsyncRunner()
 embedEngine = PaperEmbed(model_name=config.MODEL_EMBED)
 qdrant = QdrantManager()
 rerankEngine = RerankEncoder.load()
+if not rerankEngine:
+    rerankEngine = RerankEncoder()
+innovEngine = InnovEncoder.load()
+if not innovEngine:
+    innovEngine = InnovEncoder()
 
 KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
 SEARCH_REQ_TOPIC = "search-requests"
@@ -121,10 +126,10 @@ def run_search_worker():
         if not payloads:
             continue
 
-        async_runner.run(batch_and_save(payloads))
+        async_runner.run(search_process(payloads))
 
 
-async def batch_and_save(raw_payloads):
+async def search_process(raw_payloads):
     print(raw_payloads)
     query_ids = {pl["query_id"]
                  for pl in raw_payloads}
@@ -230,14 +235,9 @@ async def batch_and_save(raw_payloads):
     rerank_res_embeds = rerankEngine(
         [torch.tensor(pt.vector) for qid in query_ids for pt in results[qid].points])
 
-    # rerank_scores = {}
-    # for i, qid in enumerate(query_ids):
-    #     rerank_scores[qid] = rerankEngine.compute_max_sim(
-    #         rerank_query_embeds[i], rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
-
     rerank_scores = {}
     for i, qid in enumerate(query_ids):
-        rerank_scores[qid] = rerankEngine.compute_max_sim(
+        rerank_scores[qid] = compute_max_sim(
             torch.stack(rerank_embeds[qid], dim=1), rerank_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]).cpu().tolist()
 
     for i, qid in enumerate(query_ids):
@@ -251,7 +251,10 @@ async def batch_and_save(raw_payloads):
 
         payload = payload[:topKs[qid]]
 
-        rerank_version_date = f"{rerankEngine.version}-{rerankEngine.training_date}"
+        if hasattr(rerankEngine, 'version'):
+            rerank_version_date = f"{rerankEngine.version}-{rerankEngine.training_date}"
+        else:
+            rerank_version_date = 'None'
 
         blendscorer = BlendScorer.load(task_ids[qid])
         trained = blendscorer.fit(payload)
@@ -334,8 +337,7 @@ def append_results(task_id: str, result_data: list):
 
 
 def load_existing_result(task_id: str):
-    users_root = config.USERS_ROOT
-    full_path = os.path.join(users_root, f"{task_id}.inprogress")
+    full_path = config.USERS_ROOT / f"{task_id}.inprogress"
     if os.path.exists(full_path):
         with open(full_path, "r") as f:
             try:
@@ -347,9 +349,8 @@ def load_existing_result(task_id: str):
 
 
 def mark_as_inprogress(task_id: str):
-    users_root = config.USERS_ROOT
-    json_path = os.path.join(users_root, f"{task_id}.json")
-    inprogress_path = os.path.join(users_root, f"{task_id}.inprogress")
+    json_path = config.USERS_ROOT / f"{task_id}.json"
+    inprogress_path = config.USERS_ROOT / f"{task_id}.inprogress"
 
     if os.path.exists(json_path):
         os.replace(json_path, inprogress_path)
@@ -360,12 +361,125 @@ def mark_as_inprogress(task_id: str):
 
 
 def mark_as_complete(task_id: str):
-    users_root = config.USERS_ROOT
-    inprogress_path = os.path.join(users_root, f"{task_id}.inprogress")
-    json_path = os.path.join(users_root, f"{task_id}.json")
+    inprogress_path = config.USERS_ROOT / f"{task_id}.inprogress"
+    json_path = config.USERS_ROOT / f"{task_id}.json"
 
     if os.path.exists(inprogress_path):
         os.replace(inprogress_path, json_path)
+
+
+async def innov_process(raw_payloads):
+    print(raw_payloads)
+    query_ids = {pl["query_id"]
+                 for pl in raw_payloads}
+    search_queries = {pl["query_id"]: pl["query"] for pl in raw_payloads}
+    task_ids = {pl["query_id"]: pl["task_id"]
+                for pl in raw_payloads}
+    topKs = {pl["query_id"]: pl["topK"]
+             for pl in raw_payloads}
+    paperLocks = {pl["query_id"]: pl["paperLock"]
+                  for pl in raw_payloads}
+
+    # expanding query_ids and queries for batch embeddings
+    expanded_query_ids = [
+        qid for qid in query_ids for _ in search_queries[qid].get('queries')
+    ]
+    expanded_queries = [
+        q for qid in query_ids for q in search_queries[qid].get('queries')
+    ]
+    q_embeds = embedEngine.embed_queries(expanded_queries)
+
+    # Reconstructing list of embeddings per query_id
+    query_embeds = {}
+    for qid, q_emb in zip(expanded_query_ids, q_embeds.tolist()):
+        query_embeds.setdefault(qid, []).append(q_emb)
+
+    meta_filters = []
+    for qid in query_ids:
+        meta_filters.append([])
+        if search_queries[qid].get('search_paperIds', None):
+            meta_filters[-1].append(['paperId', '==',
+                                    search_queries[qid]['search_paperIds']])
+
+        existing_results = load_existing_result(task_ids[qid])
+        if paperLocks[qid]:
+            existing_paper_ids = [
+                pl.get('paperId') for pl in existing_results if pl.get('user_score') >= 0]
+            meta_filters[-1].append(['paperId', '==', existing_paper_ids])
+            logger.info([pl.get('paperId') for pl in existing_results])
+
+        trashed_paper_ids = [
+            pl.get('paperId') for pl in existing_results if pl.get('user_score') < 0]
+        meta_filters[-1].append(['paperId', '!=', trashed_paper_ids])
+        logger.info([pl.get('paperId') for pl in trashed_paper_ids])
+
+    results = await qdrant.query_batch_streamed(
+        query_vectors=[query_embeds[qid] for qid in query_ids],
+        query_ids=query_ids,
+        topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in query_ids],
+        topK_per_paper=search_config["topk_per_article"],
+        payload_filters=meta_filters,
+        with_vectors=True,
+    )
+
+    # rerank_query_embeds = rerankEngine(
+    #     query_embeds.unsqueeze(1).to(rerankEngine.device))
+    res_embeds_offset = [
+        0] + [len(results[qid].points) for qid in query_ids]
+    res_embeds_offset = np.cumsum(res_embeds_offset)
+    innov_res_embeds = innovEngine(
+        [torch.tensor(pt.vector) for qid in query_ids for pt in results[qid].points])
+
+    # Need to transform query_embeds to tensors
+    payloads = {}
+    for i, qid in enumerate(query_ids):
+        payloads[qid] = []
+        for i, q_emb in enumerate(query_embeds[qid]):
+            query = search_queries[qid].get('queries')[i]
+            q_emb = torch.tensor(q_emb).unsqueeze(0)
+            innov_sim = compute_max_sim(
+                innov_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]].unsqueeze(1), q_emb.unsqueeze(1)).cpu().tolist()
+            n_papers = res_embeds_offset[i+1] - res_embeds_offset[i]
+            payloads[qid].append(
+                {'query': query, 'innov_score': innov_sim / n_papers})
+
+    for qid, payload in payloads.items():
+        if hasattr(innovEngine, "version"):
+            innov_version_date = f"{innovEngine.version}-{innovEngine.training_date}"
+        else:
+            innov_version_date = 'None'
+
+        payload = sorted(payload,
+                         key=lambda p: p['innov_score'],
+                         reverse=True)
+        base_json = {
+            "id": qid,
+            "task_id": qid,
+            "query_id": qid,
+            "user_id": raw_payloads[i].get("user_id"),
+            "notebook_id": raw_payloads[i].get("notebook_id"),
+            "qdrant_model": qdrant.model_name,
+            "innov_model": innov_version_date,
+            "timestamp": time.time(),
+        }
+
+        result_json = [{**base_json, **pl} for pl in payload]
+
+        # Save to disk
+        save_innov_results(f"{task_ids[qid]}/{qid}", result_json)
+        logger.info(f"Innovative questions for {qid} completed")
+
+
+def save_innov_results(innov_id: str, result_data: list):
+    users_root = config.USERS_ROOT
+    innov_path = os.path.join(users_root, f"{innov_id}.innov.json")
+    os.makedirs(os.path.dirname(innov_path), exist_ok=True)
+
+    logger.info(f"Innov path: {innov_path}")
+
+    # Save payload
+    with open(innov_path, "w") as f:
+        json.dump(result_data, f)
 
 
 def start_search_engine():

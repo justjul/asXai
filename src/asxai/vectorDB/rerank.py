@@ -71,6 +71,26 @@ class AttentionPooling(nn.Module):
         return pooled
 
 
+def compute_max_sim(
+    Q_embeds: torch.Tensor,
+    D_embeds: torch.Tensor
+):
+    if D_embeds.size(1) == 0:
+        return torch.zeros(Q_embeds.size(0), device=Q_embeds.device)
+    if Q_embeds.dim() == 2:
+        Q_embeds = Q_embeds.unsqueeze(0)
+    if D_embeds.dim() == 2:
+        D_embeds = D_embeds.unsqueeze(0)
+
+    Q_embeds = F.normalize(Q_embeds, p=2, dim=-1)
+    D_embeds = F.normalize(D_embeds, p=2, dim=-1)
+    if Q_embeds.size(0) == 1 and D_embeds.size(0) > 1:
+        Q_embeds = Q_embeds.expand(D_embeds.size(0), -1, -1)
+    max_sim = (torch.bmm(Q_embeds, D_embeds.transpose(1, 2))).max(
+        dim=-1).values.sum(dim=1)
+    return max_sim
+
+
 class BaseEncoder(nn.Module):
     def __init__(self, config_dict):
         super().__init__()
@@ -234,30 +254,10 @@ class RerankEncoder(BaseEncoder):
         labels = torch.zeros(B, dtype=torch.long, device=Q.device)
         loss = F.cross_entropy(logits, labels)
         if return_scores:
-            pos_score = self.compute_max_sim(Q, P)
-            neg_score = self.compute_max_sim(Q, N)
+            pos_score = compute_max_sim(Q, P)
+            neg_score = compute_max_sim(Q, N)
             return loss, pos_score, neg_score
         return loss
-
-    def compute_max_sim(
-        self,
-        Q_embeds: torch.Tensor,
-        D_embeds: torch.Tensor
-    ):
-        if D_embeds.size(1) == 0:
-            return torch.zeros(Q_embeds.size(0), device=Q_embeds.device)
-        if Q_embeds.dim() == 2:
-            Q_embeds = Q_embeds.unsqueeze(0)
-        if D_embeds.dim() == 2:
-            D_embeds = D_embeds.unsqueeze(0)
-
-        Q_embeds = F.normalize(Q_embeds, p=2, dim=-1)
-        D_embeds = F.normalize(D_embeds, p=2, dim=-1)
-        if Q_embeds.size(0) == 1 and D_embeds.size(0) > 1:
-            Q_embeds = Q_embeds.expand(D_embeds.size(0), -1, -1)
-        max_sim = (torch.bmm(Q_embeds, D_embeds.transpose(1, 2))).max(
-            dim=-1).values.sum(dim=1)
-        return max_sim
 
     def rerank_score(
         self,
@@ -284,7 +284,7 @@ class RerankEncoder(BaseEncoder):
             Q_embeds = Q_embeds.to(dtype=torch.float32)
             D_embeds = D_embeds.to(dtype=torch.float32)
 
-        max_sim = self.compute_max_sim(Q_embeds, D_embeds)
+        max_sim = compute_max_sim(Q_embeds, D_embeds)
 
         return max_sim.squeeze(0).cpu().tolist()
 
