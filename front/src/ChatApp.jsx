@@ -1513,24 +1513,32 @@ export default function ChatApp() {
             const isUpdate = msg?.mode === "update";
             const isExplore = msg?.mode === "question";
 
-            const backgroundColor = isSelected
-              ? 'var(--main-fg-sel)'
-              : isUpdate
+            const backgroundColor = isUpdate
               ? 'var(--main-fg-update)'
               : isExplore
               ? 'var(--main-fg-question)'
+              : isSelected
+              ? 'var(--main-fg-sel)'
               : 'var(--main-fg)';
+
+            const borderColor = (isSelected && (isUpdate || isExplore))
+              ? 'var(--main-fg-sel)'
+              : 'none';
+
+            const border = (isSelected && (isUpdate || isExplore))
+              ? '4px solid'
+              : 'none';
 
             const font_size = '1rem'
 
             const marginLeft = isUpdate || isExplore
-              ? '15%' 
+              ? '10%' 
               : msg.role === 'user' 
               ? '15%'
               : '5%';
                   
             const marginRight = isUpdate || isExplore
-              ? '15%' 
+              ? '10%' 
               : msg.role === 'user' 
               ? '5%'
               : '5%';
@@ -1543,7 +1551,8 @@ export default function ChatApp() {
                   padding: '1rem',
                   borderRadius: '1%',
                   cursor: 'default',
-                  border: "none",
+                  border: border,
+                  borderColor: borderColor,
                   fontSize: font_size,
                   marginLeft: marginLeft,
                   marginRight: marginRight,
