@@ -404,8 +404,6 @@ chat:
 
             ### Output
             The polished version of that text, inline citations in place, no prefatory remarks.
-           
-
   instruct_update: >
             You are a scientific assistant generating a short summary of new articles related to the past user's query.\n\n
 
@@ -421,6 +419,33 @@ chat:
             Answer directly to the user.
             Mention at the end of your response that the article have been automatically added to the user's notebook but can be removed by using the delete button.\n
             Here are the user's past queries:\n
+            <CONTENT>\n
+  instruct_genQuestions: |
+            Given a set of scientific articles, your task is to identify open research questions that emerge from the intersection, tensions, or gaps in these works.
+
+            Do not summarize or list the topics covered in the articles. Instead, formulate high-quality, forward-looking research questions that are:
+            - Not already directly answered by any individual paper,
+            - Inspired by contrasting methods, assumptions, or claims across the set,
+            - Suitable as future research projects or hypothesis-driven investigations.
+
+            Return your output in a strictly valid JSON with the following fields:
+            <FIELDS>
+  instruct_presentQuestions: |
+            You are assisting in presenting a list of open research questions derived from a set of scientific articles. 
+            Each question is associated with a score (from 0 to 1), representing its relevance or potential for impact, as judged by a ranking model.
+
+            Your task is to synthesize this list into a coherent and engaging output for a research or innovation audience. 
+
+            Given the list of questions and the set of articles provided in the context of the conversation:
+            1- Begin with a short introduction to explain the origin and purpose of the open questions (e.g., "The following questions were inferred from recent research on X and highlight promising areas for further exploration.").
+            2- Group or order the questions based on their scores, from highest to lowest.
+            3- For each question:
+              - Briefly describe why it is considered an open or relevant problem (based on its position in the list, or implied gaps).
+              - You may cite the related articles if needed.
+
+            Do not invent new questions. Stay concise, and aim for clarity and strategic relevance.
+
+            Here is the list of open questions with their scores:\n
             <CONTENT>\n
 
 

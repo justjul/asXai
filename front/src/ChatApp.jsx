@@ -1511,22 +1511,25 @@ export default function ChatApp() {
           {messages.map((msg, idx) => {
             const isSelected = msg.query_id && selectedQueryIds.has(msg.query_id);
             const isUpdate = msg?.mode === "update";
+            const isExplore = msg?.mode === "question";
 
             const backgroundColor = isSelected
               ? 'var(--main-fg-sel)'
               : isUpdate
               ? 'var(--main-fg-update)'
+              : isExplore
+              ? 'var(--main-fg-question)'
               : 'var(--main-fg)';
 
             const font_size = '1rem'
 
-            const marginLeft = isUpdate
+            const marginLeft = isUpdate || isExplore
               ? '15%' 
               : msg.role === 'user' 
               ? '15%'
               : '5%';
                   
-            const marginRight = isUpdate
+            const marginRight = isUpdate || isExplore
               ? '15%' 
               : msg.role === 'user' 
               ? '5%'
@@ -1718,7 +1721,8 @@ export default function ChatApp() {
                     </span>
                   }
 
-                  {msg.search_query && (
+                  {msg.search_query && 
+                    msg.mode !== 'update' && (
                       <span
                         style={{
                           cursor: 'pointer',
@@ -1733,6 +1737,7 @@ export default function ChatApp() {
                   {msg.role === 'assistant' &&
                     msg.mode !== 'update' &&
                       msg.mode !== 'expand' &&
+                        msg.mode !== 'question' &&
                     <span
                       style={{
                         cursor: 'pointer',
@@ -2039,7 +2044,7 @@ export default function ChatApp() {
           marginLeft: "5%",
           marginRight: "5%",
           marginTop: "0.5%",
-          marginBottom: "2%",
+          marginBottom: !streamingNotebookIds.has(notebookId) ? "0.1%": "2%",
           display: "flex",
           justifyContent: 'space-between',
           flexDirection: 'row',
@@ -2107,6 +2112,22 @@ export default function ChatApp() {
             {!streamingNotebookIds.has(notebookId) ? '▶' : '◼'}
           </button>
         </div>
+        {!streamingNotebookIds.has(notebookId) && (
+          <div style={{
+            textAlign: 'center',
+            marginTop: '0.1%',
+            marginBottom: '1%',
+            fontSize: '0.9rem',
+            color: '#3b82f6',
+            cursor: 'pointer',
+            textDecoration: 'underline',
+            fontFamily: 'var(--main-font)'
+          }}
+          onClick={() => handleSubmit({editedQuestion: "*explore questions*"})}
+          >
+            Looking for questions instead?
+          </div>
+        )}
       </div>
 
 

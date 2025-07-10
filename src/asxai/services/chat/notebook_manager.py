@@ -305,13 +305,13 @@ class NotebookManager:
             for paper in m.get("papers", []) or []
         ])
 
+        search_history = []
         search_path = self.get_search_path(task_id)
         query_results = self.collect_searches(task_id)
         if os.path.isfile(search_path):
             with open(search_path, "r") as f:
                 search_history = json.load(f)
-        else:
-            search_history = query_results
+        search_history += query_results
 
         new_search_history = [
             pl for pl in search_history if pl.get(

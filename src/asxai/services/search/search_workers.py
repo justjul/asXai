@@ -1,7 +1,9 @@
 import time
 import json
 from confluent_kafka import Consumer
+from confluent_kafka.admin import AdminClient, NewTopic
 import threading
+import asyncio
 from pathlib import Path
 import os
 import hashlib
@@ -34,12 +36,38 @@ innovEngine = InnovEncoder.load()
 if not innovEngine:
     innovEngine = InnovEncoder()
 
-KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
-SEARCH_REQ_TOPIC = "search-requests"
-consumer = Consumer({'bootstrap.servers': KAFKA_BOOTSTRAP,
-                     'group.id': 'search-group',
-                     'auto.offset.reset': 'earliest'})
-consumer.subscribe([SEARCH_REQ_TOPIC])
+
+search_queue = asyncio.Queue()
+question_queue = asyncio.Queue()
+
+
+def kafka_poller(consumer, queue: asyncio.Queue):
+    while True:
+        msg = consumer.poll(1.0)
+        if msg and not msg.error():
+            payload = json.loads(msg.value())
+            async_runner.run(queue.put(payload))
+
+
+def create_topic_if_needed(bootstrap_servers: str, topic_name: str, num_partitions: int = 1, replication_factor: int = 1):
+    admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
+    topic_metadata = admin_client.list_topics(timeout=5)
+
+    if topic_name not in topic_metadata.topics:
+        logger.info(f"Creating Kafka topic '{topic_name}'...")
+        new_topic = NewTopic(
+            topic=topic_name, num_partitions=num_partitions, replication_factor=replication_factor)
+        fs = admin_client.create_topics([new_topic])
+
+        for topic, f in fs.items():
+            try:
+                f.result()
+                logger.info(f"Topic '{topic}' created successfully.")
+            except Exception as e:
+                logger.error(f"Failed to create topic '{topic}': {e}")
+    else:
+        logger.info(f"Kafka topic '{topic_name}' already exists.")
+
 
 BATCH_SIZE = 8
 MAX_WAIT = 0.2
@@ -108,25 +136,6 @@ class BlendScorer:
             instance.weights = state.get("weights", {})
             return instance
         return cls()
-
-
-def run_search_worker():
-    logger.info("Search worker ready")
-
-    while True:
-        payloads = []
-        start = time.time()
-
-        while len(payloads) < BATCH_SIZE and time.time() - start < MAX_WAIT:
-            msg = consumer.poll(0.05)
-            if msg and not msg.error():
-                payload = json.loads(msg.value())
-                payloads.append(payload)
-
-        if not payloads:
-            continue
-
-        async_runner.run(search_process(payloads))
 
 
 async def search_process(raw_payloads):
@@ -299,15 +308,29 @@ async def search_process(raw_payloads):
 
 
 def save_results(search_id: str, result_data: list):
-    users_root = config.USERS_ROOT
-    search_path = os.path.join(users_root, f"{search_id}.json")
+    search_path = config.USERS_ROOT / f"{search_id}.json"
+    inprogress_path = config.USERS_ROOT / f"{search_id}.inprogress"
     os.makedirs(os.path.dirname(search_path), exist_ok=True)
 
     logger.info(f"Search path: {search_path}")
 
     # Save payload
-    with open(search_path, "w") as f:
+    with open(inprogress_path, "w") as f:
         json.dump(result_data, f)
+
+    os.rename(inprogress_path, search_path)
+
+
+def load_existing_result(task_id: str):
+    full_path = config.USERS_ROOT / f"{task_id}.json"
+    if os.path.exists(full_path):
+        with open(full_path, "r") as f:
+            try:
+                return json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not decode result for {task_id}: {e}")
+                return []
+    return []
 
 
 def append_results(task_id: str, result_data: list):
@@ -336,18 +359,6 @@ def append_results(task_id: str, result_data: list):
         json.dump(existing_data, f)
 
 
-def load_existing_result(task_id: str):
-    full_path = config.USERS_ROOT / f"{task_id}.inprogress"
-    if os.path.exists(full_path):
-        with open(full_path, "r") as f:
-            try:
-                return json.load(f)
-            except Exception as e:
-                logger.warning(f"Could not decode result for {task_id}: {e}")
-                return []
-    return []
-
-
 def mark_as_inprogress(task_id: str):
     json_path = config.USERS_ROOT / f"{task_id}.json"
     inprogress_path = config.USERS_ROOT / f"{task_id}.inprogress"
@@ -368,17 +379,13 @@ def mark_as_complete(task_id: str):
         os.replace(inprogress_path, json_path)
 
 
-async def innov_process(raw_payloads):
+async def question_process(raw_payloads):
     print(raw_payloads)
     query_ids = {pl["query_id"]
                  for pl in raw_payloads}
     search_queries = {pl["query_id"]: pl["query"] for pl in raw_payloads}
     task_ids = {pl["query_id"]: pl["task_id"]
                 for pl in raw_payloads}
-    topKs = {pl["query_id"]: pl["topK"]
-             for pl in raw_payloads}
-    paperLocks = {pl["query_id"]: pl["paperLock"]
-                  for pl in raw_payloads}
 
     # expanding query_ids and queries for batch embeddings
     expanded_query_ids = [
@@ -397,16 +404,12 @@ async def innov_process(raw_payloads):
     meta_filters = []
     for qid in query_ids:
         meta_filters.append([])
-        if search_queries[qid].get('search_paperIds', None):
-            meta_filters[-1].append(['paperId', '==',
-                                    search_queries[qid]['search_paperIds']])
-
         existing_results = load_existing_result(task_ids[qid])
-        if paperLocks[qid]:
-            existing_paper_ids = [
-                pl.get('paperId') for pl in existing_results if pl.get('user_score') >= 0]
-            meta_filters[-1].append(['paperId', '==', existing_paper_ids])
-            logger.info([pl.get('paperId') for pl in existing_results])
+
+        existing_paper_ids = [
+            pl.get('paperId') for pl in existing_results if pl.get('user_score') >= 0]
+        meta_filters[-1].append(['paperId', '==', existing_paper_ids])
+        logger.info([pl.get('paperId') for pl in existing_results])
 
         trashed_paper_ids = [
             pl.get('paperId') for pl in existing_results if pl.get('user_score') < 0]
@@ -416,7 +419,7 @@ async def innov_process(raw_payloads):
     results = await qdrant.query_batch_streamed(
         query_vectors=[query_embeds[qid] for qid in query_ids],
         query_ids=query_ids,
-        topKs=[search_config["ntopk_qdrant"]*topKs[qid] for qid in query_ids],
+        topKs=[len(existing_paper_ids) for qid in query_ids],
         topK_per_paper=search_config["topk_per_article"],
         payload_filters=meta_filters,
         with_vectors=True,
@@ -434,14 +437,21 @@ async def innov_process(raw_payloads):
     payloads = {}
     for i, qid in enumerate(query_ids):
         payloads[qid] = []
-        for i, q_emb in enumerate(query_embeds[qid]):
-            query = search_queries[qid].get('queries')[i]
-            q_emb = torch.tensor(q_emb).unsqueeze(0)
-            innov_sim = compute_max_sim(
-                innov_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]].unsqueeze(1), q_emb.unsqueeze(1)).cpu().tolist()
-            n_papers = res_embeds_offset[i+1] - res_embeds_offset[i]
+        n_papers = res_embeds_offset[i+1] - res_embeds_offset[i]
+        for k, q_emb in enumerate(query_embeds[qid]):
+            query = search_queries[qid].get('queries')[k]
+            q_emb = torch.tensor(q_emb).to(innovEngine.device)
+            q_emb = q_emb.unsqueeze(0).unsqueeze(1)
+            q_emb = q_emb.expand(n_papers, -1, -1)
+            innov_embs = innov_res_embeds[res_embeds_offset[i]:res_embeds_offset[i+1]]
+            innov_embs = innov_embs.unsqueeze(1)
+            innov_sim = compute_max_sim(innov_embs, q_emb).cpu().tolist()
             payloads[qid].append(
-                {'query': query, 'innov_score': innov_sim / n_papers})
+                {'query': query, 'score': float(np.mean(innov_sim))})
+
+        print(payloads[qid])
+        payloads[qid] = sorted(
+            payloads[qid], key=lambda p: p['score'], reverse=True)
 
     for qid, payload in payloads.items():
         if hasattr(innovEngine, "version"):
@@ -449,9 +459,6 @@ async def innov_process(raw_payloads):
         else:
             innov_version_date = 'None'
 
-        payload = sorted(payload,
-                         key=lambda p: p['innov_score'],
-                         reverse=True)
         base_json = {
             "id": qid,
             "task_id": qid,
@@ -466,20 +473,90 @@ async def innov_process(raw_payloads):
         result_json = [{**base_json, **pl} for pl in payload]
 
         # Save to disk
-        save_innov_results(f"{task_ids[qid]}/{qid}", result_json)
-        logger.info(f"Innovative questions for {qid} completed")
+        save_innov_results(f"{task_ids[qid]}", result_json)
+        logger.info(f"Open questions search for {qid} completed")
 
 
-def save_innov_results(innov_id: str, result_data: list):
-    users_root = config.USERS_ROOT
-    innov_path = os.path.join(users_root, f"{innov_id}.innov.json")
+def save_innov_results(task_id: str, result_data: list):
+    innov_path = config.USERS_ROOT / f"{task_id}.innov.json"
+    inprogress_path = config.USERS_ROOT / f"{task_id}.innov.inprogress"
     os.makedirs(os.path.dirname(innov_path), exist_ok=True)
 
     logger.info(f"Innov path: {innov_path}")
 
     # Save payload
-    with open(innov_path, "w") as f:
+    with open(inprogress_path, "w") as f:
         json.dump(result_data, f)
+
+    os.rename(inprogress_path, innov_path)
+
+
+async def search_worker_loop():
+    while True:
+        payloads = []
+        start = time.time()
+
+        while len(payloads) < BATCH_SIZE and time.time() - start < MAX_WAIT:
+            payload = await search_queue.get()
+            payloads.append(payload)
+            print("payload found")
+
+        if not payloads:
+            continue
+
+        asyncio.create_task(search_process(payloads))
+
+
+async def question_worker_loop():
+    while True:
+        payloads = []
+        start = time.time()
+
+        while len(payloads) < BATCH_SIZE and time.time() - start < MAX_WAIT:
+            payload = await question_queue.get()
+            payloads.append(payload)
+            print("payload found")
+
+        if not payloads:
+            continue
+
+        asyncio.create_task(question_process(payloads))
+
+
+async def search_loops():
+    logger.info("Search and Question workers running")
+    await asyncio.gather(
+        search_worker_loop(),
+        question_worker_loop()
+    )
+
+
+def run_search_worker():
+    KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
+    SEARCH_REQ_TOPIC = "search-requests"
+    QUESTIONS_REQ_TOPIC = "questions-requests"
+
+    create_topic_if_needed(KAFKA_BOOTSTRAP, SEARCH_REQ_TOPIC)
+    consumer = Consumer({'bootstrap.servers': KAFKA_BOOTSTRAP,
+                        'group.id': 'search-group',
+                         'auto.offset.reset': 'earliest'})
+    consumer.subscribe([SEARCH_REQ_TOPIC])
+
+    create_topic_if_needed(KAFKA_BOOTSTRAP, QUESTIONS_REQ_TOPIC)
+    consumer_Q = Consumer({'bootstrap.servers': KAFKA_BOOTSTRAP,
+                           'group.id': 'question-group',
+                           'auto.offset.reset': 'earliest'})
+    consumer_Q.subscribe([QUESTIONS_REQ_TOPIC])
+
+    threading.Thread(target=kafka_poller,
+                     args=(consumer, search_queue),
+                     daemon=True).start()
+
+    threading.Thread(target=kafka_poller,
+                     args=(consumer_Q, question_queue),
+                     daemon=True).start()
+
+    async_runner.run(search_loops())
 
 
 def start_search_engine():
@@ -491,7 +568,8 @@ def start_search_engine():
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_search_worker, daemon=True)
+    async_runner.run(run_search_worker())
+    # t1 = threading.Thread(target=run_search_worker, daemon=True)
 
-    t.start()
-    t.join()
+    # t1.start()
+    # t1.join()

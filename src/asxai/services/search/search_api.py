@@ -26,6 +26,7 @@ search_config = params["search"]
 
 KAFKA_BOOTSTRAP = "kafka:9092" if running_inside_docker() else "localhost:29092"
 SEARCH_REQ_TOPIC = "search-requests"
+QUESTIONS_REQ_TOPIC = "questions-requests"
 HASH_LEN = search_config['hash_len']
 
 USERS_ROOT = config.USERS_ROOT
@@ -203,6 +204,32 @@ async def get_latest_result(task_id: str):
         raise HTTPException(
             status_code=404, detail=f"No result found for {task_id}")
     return {"task_id": task_id, "notebook": result}
+
+
+@app.post("/questions")
+async def create_questions(req: QueryRequest):
+    task_id = make_task_id(req.user_id, req.notebook_id)
+    payload = {
+        "task_id": task_id,
+        "query": req.query,
+        "user_id": req.user_id,
+        "query_id": req.query_id,
+        "notebook_id": req.notebook_id,
+    }
+    print(payload)
+    producer.produce(QUESTIONS_REQ_TOPIC, key=task_id,
+                     value=json.dumps(payload))
+    producer.flush()
+    return {"task_id": task_id}
+
+
+@app.get("/questions/{task_id:path}")
+async def get_latest_questions(task_id: str):
+    result = get_result(task_id + ".innov")
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"No result found for {task_id}")
+    return {"task_id": task_id, "questions": result}
 
 
 @app.get("/metrics")

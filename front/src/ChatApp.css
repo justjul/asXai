@@ -38,6 +38,7 @@
   --main-fg: #f7f7f7;
   --main-fg-sel: #dbf0ed;
   --main-fg-update: #f7f0f0;
+  --main-fg-question: #e8e9f8;
   --main-border: #aca6a6;
   --main-font-link: #2f82ee;
   --main-font-link-sel:  #55ca38;
@@ -50,7 +51,8 @@
     --main-bg: #1f1d1dda;
     --main-fg: #000000;
     --main-fg-sel: #2d3e3f;
-    --main-fg-update: #2c2626;
+    --main-fg-update: #554141;
+    --main-fg-question: #3b3d55;
     --main-border: #000000;
     --main-font-link: #a5cafa;
     --main-font-link-sel:  #adf89b;

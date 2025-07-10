@@ -21,8 +21,8 @@ from typing import Union, List
 from asxai.dataIO import load_data
 from asxai.vectorDB import QdrantManager
 from asxai.utils import load_params
-from asxai.utils import log_and_register_model, auto_promote_best_model, clean_runs_keep_top_k, set_mlflow_uri
-from asxai.utils import CiteDataset
+from asxai.vectorDB.utils import log_and_register_model, auto_promote_best_model, clean_runs_keep_top_k, set_mlflow_uri
+from asxai.vectorDB.utils import CiteDataset
 from asxai.utils import AsyncRunner
 from asxai.logger import get_logger
 

@@ -493,14 +493,20 @@ class GenerationPlannerMCP(BaseModel):
 
 class QuestionGeneratorMCP(BaseModel):
     """
-    MCP model to find open questions.
+    MCP model to find open research questions.
+
     Fields:
-        sections: List of SectionPlan entries.
-        abstract: 2-3 sentence summary answering the query.
+        questions: A list of high-quality open questions inferred from the gaps or tensions
+                   across the provided research articles.
+        paperIds: The list of paper IDs from which the questions were inferred.
     """
-    sections: List[SectionPlan]
-    abstract: str = Field(
-        description="A short summary of 2-3 sentences that answers the question")
+    questions: List[str] = Field(
+        description="A list of 5 to 10 open research questions that are not directly answered in the given articles."
+        + "These questions should highlight gaps, intersections, or promising directions for future research that would get inspiration from several of the given articles."
+    )
+    paperIds: bool = Field(
+        description="List of paper IDs that were used to establish these open questions."
+    )
 
     @classmethod
     def generate_prompt(cls, instruct: str) -> str:
@@ -508,7 +514,7 @@ class QuestionGeneratorMCP(BaseModel):
         Builds the prompt by listing expected fields with descriptions.
 
         Args:
-            instruct: Template containing '<FIELDS>' and '<HISTORY>' placeholders.
+            instruct: Template containing '<FIELDS>' placeholder.
 
         Returns:
             Populated prompt string.
@@ -525,21 +531,10 @@ class QuestionGeneratorMCP(BaseModel):
         msg = parse_model_response(response)
         res = parse_mcp_response(msg['content'])
 
-        abstract = res.get('abstract', [])
-        sections = res.get('sections', [])
-
         key_map = {
-            'title': ['title', 'topic'],
-            'content': ['description', 'content', 'scope'],
+            'questions': ['question', 'open'],
             'paperIds': ['paper', 'references', 'papers']
         }
         extractor = RobustKeyExtractor(key_map)
-        sections = [extractor.extract(section) for section in sections]
 
-        all_paperIds = [
-            paperId for section in sections for paperId in section["paperIds"]]
-        for section in sections:
-            if "introduction" in section["title"].lower() or "tldr" in section["title"].lower():
-                section["paperIds"] = all_paperIds
-
-        return {"abstract": abstract, "sections": sections}
+        return extractor.extract(res)
