@@ -2053,7 +2053,7 @@ export default function ChatApp() {
           marginLeft: "5%",
           marginRight: "5%",
           marginTop: "0.5%",
-          marginBottom: !streamingNotebookIds.has(notebookId) ? "0.1%": "2%",
+          marginBottom: (!streamingNotebookIds.has(notebookId) && allReferencedPapers.length > 0) ? "0.1%": "2%",
           display: "flex",
           justifyContent: 'space-between',
           flexDirection: 'row',
@@ -2121,7 +2121,7 @@ export default function ChatApp() {
             {!streamingNotebookIds.has(notebookId) ? '▶' : '◼'}
           </button>
         </div>
-        {!streamingNotebookIds.has(notebookId) && (
+        {!streamingNotebookIds.has(notebookId) && allReferencedPapers.length > 0 && (
           <div style={{
             textAlign: 'center',
             marginTop: '0.1%',
